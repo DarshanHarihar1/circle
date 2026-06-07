@@ -1,0 +1,111 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── DESIGN.md custom tokens (Wired editorial system) ─────────────────── */
+@theme inline {
+  /* Map shadcn aliases → CSS vars */
+  --color-background:  var(--background);
+  --color-foreground:  var(--foreground);
+  --color-card:        var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover:     var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary:     var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary:   var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:       var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent:      var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border:      var(--border);
+  --color-input:       var(--input);
+  --color-ring:        var(--ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  /* Design-system semantic colours (use these in components) */
+  --color-ink:         #000000;
+  --color-canvas:      #ffffff;
+  --color-canvas-soft: #f5f5f5;
+  --color-hairline:    #e0e0e0;
+  --color-body-muted:  #757575;
+  --color-link:        #057dbc;
+  --color-ink-soft:    #1a1a1a;
+
+  /* Font families loaded in layout.tsx */
+  --font-display: var(--font-playfair), Georgia, serif;
+  --font-body:    var(--font-lora), Georgia, serif;
+  --font-sans:    var(--font-inter), "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    "Courier New", Courier, monospace;
+  --font-heading: var(--font-playfair), Georgia, serif;
+}
+
+/* ── Wired design-system token overrides ───────────────────────────────── */
+:root {
+  /* Canvas — pure white, never tinted */
+  --background:          oklch(1 0 0);
+  --foreground:          oklch(0 0 0);
+
+  /* Cards / popovers stay on canvas */
+  --card:                oklch(1 0 0);
+  --card-foreground:     oklch(0 0 0);
+  --popover:             oklch(1 0 0);
+  --popover-foreground:  oklch(0 0 0);
+
+  /* Primary = ink black (button-primary) */
+  --primary:             oklch(0 0 0);
+  --primary-foreground:  oklch(1 0 0);
+
+  /* Secondary = canvas with ink text (button-outline) */
+  --secondary:           oklch(1 0 0);
+  --secondary-foreground: oklch(0 0 0);
+
+  /* Muted = canvas-soft */
+  --muted:               oklch(0.966 0 0);
+  --muted-foreground:    oklch(0.51 0 0);   /* #757575 */
+
+  /* Accent = same as muted */
+  --accent:              oklch(0.966 0 0);
+  --accent-foreground:   oklch(0 0 0);
+
+  /* Destructive stays red */
+  --destructive:         oklch(0.577 0.245 27.325);
+
+  /* Borders = hairline #e0e0e0 */
+  --border:              oklch(0.897 0 0);
+  --input:               oklch(0 0 0);      /* input border = ink */
+  --ring:                oklch(0 0 0);
+
+  /* radius = 0 — square geometry everywhere */
+  --radius: 0px;
+}
+
+/* No dark mode — the design is strictly ink-on-canvas */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    border-radius: 0 !important;   /* enforce square geometry globally */
+  }
+  /* Re-allow circular shapes where explicitly set */
+  .rounded-full {
+    border-radius: 9999px !important;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+  html {
+    @apply font-sans;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+  }
+}

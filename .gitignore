@@ -1,0 +1,27 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+**/__pycache__/
+**/*.pyc
+backend/.env
+
+# Logs
+backend/uvicorn*.log
+*.log
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# Infra
+infra/volumes/
+
+# Secrets / tokens
+.swiggy_token.json
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
