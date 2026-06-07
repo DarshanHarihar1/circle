@@ -30,6 +30,7 @@ def create_room(db: Session, host_user_id: str,
                 display_name: str = "Host") -> tuple[Room, Participant]:
     room = Room(id=str(uuid.uuid4()), host_user_id=host_user_id, status="collecting")
     db.add(room)
+    db.flush()  # write room row before participant FK reference
     host = Participant(id=str(uuid.uuid4()), room_id=room.id,
                        display_name=display_name, is_host=True)
     db.add(host)
