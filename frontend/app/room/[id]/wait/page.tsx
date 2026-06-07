@@ -1,21 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
+import PlanReveal from "@/components/PlanReveal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const PLAN_STATUSES = ["discovering", "choosing", "ordering", "tracking", "done"];
 
 export default function WaitPage() {
   const { id: roomId } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const participantId = searchParams.get("pid") ?? "";
-  const router = useRouter();
 
   const [participants, setParticipants] = useState<{ display_name: string; has_card: boolean }[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [kicked, setKicked] = useState(false);
+  const [status, setStatus] = useState<string>("collecting");
 
   useEffect(() => {
     fetch(`${API_URL}/rooms/${roomId}`)
@@ -23,8 +26,20 @@ export default function WaitPage() {
       .then((d) => {
         setParticipants(d.participants ?? []);
         setTotalCount(d.total_participants ?? 0);
+        setStatus(d.status ?? "collecting");
       })
       .catch(() => {});
+  }, [roomId]);
+
+  // Poll room status so guests advance into the plan view
+  useEffect(() => {
+    const t = setInterval(() => {
+      fetch(`${API_URL}/rooms/${roomId}`)
+        .then((r) => r.json())
+        .then((d) => setStatus(d.status ?? "collecting"))
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
   }, [roomId]);
 
   useEffect(() => {
@@ -67,15 +82,13 @@ export default function WaitPage() {
         { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${roomId}` },
         (payload) => {
           const room = payload.new as { status: string };
-          if (room.status === "active") {
-            router.push(`/room/${roomId}/menu`);
-          }
+          if (room.status) setStatus(room.status);
         }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [roomId, participantId, router]);
+  }, [roomId, participantId]);
 
   const cardsIn = participants.filter((p) => p.has_card).length;
   const progress = totalCount > 0 ? cardsIn / totalCount : 0;
@@ -85,6 +98,18 @@ export default function WaitPage() {
       <main className="min-h-screen bg-canvas flex flex-col items-center justify-center px-6">
         <h1 className="font-display text-2xl text-ink mb-3">You've been removed</h1>
         <p className="font-sans text-sm text-body-muted">The host removed you from this circle.</p>
+      </main>
+    );
+  }
+
+  // Once the agent starts planning, guests see + vote on the plans
+  if (PLAN_STATUSES.includes(status)) {
+    return (
+      <main className="min-h-screen bg-canvas">
+        <header className="flex items-center justify-center px-6 py-4 border-b border-hairline">
+          <span className="font-sans font-bold text-sm tracking-[0.3px] text-ink">Circle</span>
+        </header>
+        <PlanReveal roomId={roomId} participantId={participantId} isHost={false} />
       </main>
     );
   }

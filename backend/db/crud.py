@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session
-from .models import Candidate, CravingCard, HostToken, Participant, PrefSpec, Room
+from .models import (
+    Candidate, CravingCard, HostToken, Participant, Plan, PlanVote, PrefSpec, Room,
+)
 
 
 # ── Host tokens ───────────────────────────────────────────────────────────────
@@ -229,3 +231,99 @@ def pref_specs_as_dicts(db: Session, room_id: str) -> list[dict]:
             "soft": list(s.soft) if s.soft else [],
         })
     return out
+
+
+# ── Plans ─────────────────────────────────────────────────────────────────────
+
+def create_plan(db: Session, room_id: str, plan: dict) -> Plan:
+    row = Plan(
+        id=plan["plan_id"],
+        room_id=room_id,
+        kind=plan["kind"],
+        sub_orders=plan["sub_orders"],
+        total=int(plan["total"]),
+        satisfaction=plan.get("satisfaction"),
+        n_deliveries=int(plan["n_deliveries"]),
+        notes=("; ".join(plan["notes_uncovered"]) if plan.get("notes_uncovered") else None),
+        rationale=plan.get("rationale"),
+        why_not_runner_up=plan.get("why_not_runner_up"),
+        per_person_fit=plan.get("per_person_fit", {}),
+        rank=plan.get("rank"),
+        chosen=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def update_plan_pricing(db: Session, plan_id: str, total: int, sub_orders: list[dict]) -> None:
+    row = db.get(Plan, plan_id)
+    if row:
+        row.total = int(total)
+        row.sub_orders = sub_orders
+        db.commit()
+
+
+def delete_plans(db: Session, room_id: str) -> None:
+    plan_ids = [p.id for p in db.query(Plan).filter(Plan.room_id == room_id).all()]
+    if plan_ids:
+        db.query(PlanVote).filter(PlanVote.plan_id.in_(plan_ids)).delete(synchronize_session=False)
+    db.query(Plan).filter(Plan.room_id == room_id).delete()
+    db.commit()
+
+
+def get_plans(db: Session, room_id: str) -> list[Plan]:
+    return (db.query(Plan)
+            .filter(Plan.room_id == room_id)
+            .order_by(Plan.rank.asc().nullslast())
+            .all())
+
+
+def get_plan(db: Session, plan_id: str) -> Plan | None:
+    return db.get(Plan, plan_id)
+
+
+def set_plan_chosen(db: Session, room_id: str, plan_id: str) -> None:
+    db.query(Plan).filter(Plan.room_id == room_id).update({"chosen": False})
+    row = db.get(Plan, plan_id)
+    if row:
+        row.chosen = True
+    db.commit()
+
+
+# ── Plan votes ────────────────────────────────────────────────────────────────
+
+def add_plan_vote(db: Session, participant_id: str, plan_id: str) -> None:
+    # one vote per participant per room — clear prior votes for this participant
+    row = db.get(Plan, plan_id)
+    if not row:
+        return
+    sibling_ids = [p.id for p in db.query(Plan).filter(Plan.room_id == row.room_id).all()]
+    if sibling_ids:
+        (db.query(PlanVote)
+         .filter(PlanVote.participant_id == participant_id,
+                 PlanVote.plan_id.in_(sibling_ids))
+         .delete(synchronize_session=False))
+    existing = db.get(PlanVote, (participant_id, plan_id))
+    if not existing:
+        db.add(PlanVote(participant_id=participant_id, plan_id=plan_id))
+    db.commit()
+
+
+def get_votes(db: Session, room_id: str) -> list[dict]:
+    plan_ids = [p.id for p in db.query(Plan).filter(Plan.room_id == room_id).all()]
+    if not plan_ids:
+        return []
+    votes = db.query(PlanVote).filter(PlanVote.plan_id.in_(plan_ids)).all()
+    return [{"participant_id": v.participant_id, "plan_id": v.plan_id} for v in votes]
+
+
+def get_vote_counts(db: Session, room_id: str) -> dict[str, int]:
+    plan_ids = [p.id for p in db.query(Plan).filter(Plan.room_id == room_id).all()]
+    counts = {pid: 0 for pid in plan_ids}
+    if plan_ids:
+        votes = db.query(PlanVote).filter(PlanVote.plan_id.in_(plan_ids)).all()
+        for v in votes:
+            counts[v.plan_id] = counts.get(v.plan_id, 0) + 1
+    return counts

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { supabase } from "@/lib/supabase";
+import PlanReveal from "@/components/PlanReveal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -80,6 +81,9 @@ export default function Lobby({
   const cardsSubmitted = participants.filter((p) => p.has_card).length;
   const allSubmitted = participants.length > 0 && cardsSubmitted === participants.length;
   const agentRunning = AGENT_STATUSES.includes(roomStatus);
+  const showPlans = ["discovering", "choosing", "ordering", "tracking", "done"].includes(roomStatus);
+  const hostParticipantId = participants.find((p) => p.is_host)?.id ?? "";
+  const nameByPid = Object.fromEntries(participants.map((p) => [p.id, p.display_name]));
 
   // Fetch pref specs when status = planning
   async function fetchPrefSpecs() {
@@ -400,6 +404,16 @@ export default function Lobby({
           </motion.section>
         )}
       </AnimatePresence>
+
+      {/* Plan reveal + voting (discovering → choosing → ordering) */}
+      {showPlans && (
+        <PlanReveal
+          roomId={roomId}
+          participantId={hostParticipantId}
+          isHost={true}
+          nameByPid={nameByPid}
+        />
+      )}
 
       {/* Body — only show collecting view when still in collecting state */}
       {!agentRunning && (
