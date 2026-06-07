@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -60,6 +60,10 @@ class CravingCardBody(BaseModel):
     must_have: str | None = None
     allergies: list[str] = []
     deal_breakers: list[str] = []
+
+
+class ApprovePrefsBody(BaseModel):
+    edits: list[dict] = []   # optional host edits — reserved for Phase 4
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -189,3 +193,99 @@ async def get_addresses(
     access_token = _get_valid_token(db, host_uid)
     addresses = await call_swiggy_tool("get_addresses", {}, access_token)
     return {"addresses": addresses}
+
+
+# ── Phase 3: Agent activation & pref approval ─────────────────────────────────
+
+@router.post("/{room_id}/activate")
+async def activate_room(
+    room_id: str,
+    background_tasks: BackgroundTasks,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can activate")
+    if room.status not in ("collecting",):
+        raise HTTPException(status_code=409, detail=f"Room already activated (status={room.status})")
+    if not room.address_id:
+        raise HTTPException(status_code=422, detail="Set a delivery address before activating")
+
+    # Ensure all participants have submitted cards
+    participants = crud.get_participants(db, room_id)
+    cards = crud.get_craving_cards(db, room_id)
+    card_pids = {c.participant_id for c in cards}
+    missing = [p for p in participants if p.id not in card_pids]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{len(missing)} participant(s) haven't submitted cards yet",
+        )
+
+    # Validate the host token is present/unexpired before kicking off the agent
+    _get_valid_token(db, host_uid)
+    crud.set_room_status(db, room_id, "activated")
+
+    # Import here to avoid importing the agent stack at module load
+    from agent.runner import run_parse
+
+    background_tasks.add_task(run_parse, room_id, host_uid, room.address_id)
+
+    return {"ok": True, "status": "activated"}
+
+
+@router.get("/{room_id}/pref-specs")
+def get_pref_specs(
+    room_id: str,
+    db: Session = Depends(get_db),
+):
+    specs = crud.get_pref_specs(db, room_id)
+    return {
+        "pref_specs": [
+            {
+                "id": s.id,
+                "participant_id": s.participant_id,
+                "room_id": s.room_id,
+                "veg": s.veg,
+                "budget_max": s.budget_max,
+                "allergies": list(s.allergies) if s.allergies else [],
+                "excludes": list(s.excludes) if s.excludes else [],
+                "soft": list(s.soft) if s.soft else [],
+                "approved": s.approved,
+            }
+            for s in specs
+        ]
+    }
+
+
+@router.post("/{room_id}/approve-prefs")
+async def approve_prefs(
+    room_id: str,
+    body: ApprovePrefsBody,
+    background_tasks: BackgroundTasks,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can approve prefs")
+    if room.status != "planning":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Room is not waiting for pref approval (status={room.status})",
+        )
+
+    crud.approve_pref_specs(db, room_id)
+    crud.set_room_status(db, room_id, "discovering")
+
+    access_token = _get_valid_token(db, host_uid)
+
+    from agent.runner import run_discover
+    background_tasks.add_task(run_discover, room_id, access_token)
+
+    return {"ok": True, "status": "discovering"}
