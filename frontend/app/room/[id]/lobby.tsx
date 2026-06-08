@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { supabase } from "@/lib/supabase";
 import PlanReveal from "@/components/PlanReveal";
+import CartReview from "@/components/CartReview";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -48,13 +49,16 @@ type PrefSpec = {
   approved: boolean;
 };
 
-const AGENT_STATUSES = ["activated", "planning", "discovering", "choosing", "ordering", "tracking", "done"];
+const AGENT_STATUSES = ["activated", "planning", "discovering", "choosing", "ordering", "confirming", "tracking", "done"];
 
 const STATUS_LABEL: Record<string, string> = {
   activated: "Parsing preferences…",
   planning: "Preferences parsed — waiting for approval",
   discovering: "Discovering restaurants…",
   choosing: "Building plans…",
+  ordering: "Building cart…",
+  confirming: "Cart ready — review and place order",
+  tracking: "Order placed — tracking delivery",
 };
 
 export default function Lobby({
@@ -81,7 +85,9 @@ export default function Lobby({
   const cardsSubmitted = participants.filter((p) => p.has_card).length;
   const allSubmitted = participants.length > 0 && cardsSubmitted === participants.length;
   const agentRunning = AGENT_STATUSES.includes(roomStatus);
-  const showPlans = ["discovering", "choosing", "ordering", "tracking", "done"].includes(roomStatus);
+  const showPlans = ["discovering", "choosing"].includes(roomStatus);
+  const showCartLoading = roomStatus === "ordering";
+  const showCart = ["confirming", "tracking", "done"].includes(roomStatus);
   const hostParticipantId = participants.find((p) => p.is_host)?.id ?? "";
   const nameByPid = Object.fromEntries(participants.map((p) => [p.id, p.display_name]));
 
@@ -405,12 +411,35 @@ export default function Lobby({
         )}
       </AnimatePresence>
 
-      {/* Plan reveal + voting (discovering → choosing → ordering) */}
+      {/* Plan reveal + voting (discovering → choosing) */}
       {showPlans && (
         <PlanReveal
           roomId={roomId}
           participantId={hostParticipantId}
           isHost={true}
+          nameByPid={nameByPid}
+        />
+      )}
+
+      {/* Cart building spinner */}
+      {showCartLoading && (
+        <div className="flex flex-col items-center justify-center gap-4 py-16">
+          <motion.div
+            className="w-12 h-12 border border-ink"
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 2.5, ease: "linear" }}
+          />
+          <p className="font-display text-xl text-ink">Building your cart…</p>
+          <p className="font-sans text-sm text-body-muted">Checking item availability and pricing</p>
+        </div>
+      )}
+
+      {/* Cart review + order placement (confirming → tracking) */}
+      {showCart && (
+        <CartReview
+          roomId={roomId}
+          isHost={true}
+          hostParticipantId={hostParticipantId}
           nameByPid={nameByPid}
         />
       )}

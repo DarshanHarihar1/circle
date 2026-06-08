@@ -8,7 +8,8 @@ import PlanReveal from "@/components/PlanReveal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const PLAN_STATUSES = ["discovering", "choosing", "ordering", "tracking", "done"];
+const PLAN_STATUSES = ["discovering", "choosing"];
+const ORDER_STATUSES = ["ordering", "confirming", "tracking", "done"];
 
 export default function WaitPage() {
   const { id: roomId } = useParams<{ id: string }>();
@@ -102,7 +103,7 @@ export default function WaitPage() {
     );
   }
 
-  // Once the agent starts planning, guests see + vote on the plans
+  // Plan reveal — guests vote during discovering/choosing
   if (PLAN_STATUSES.includes(status)) {
     return (
       <main className="min-h-screen bg-canvas">
@@ -110,6 +111,34 @@ export default function WaitPage() {
           <span className="font-sans font-bold text-sm tracking-[0.3px] text-ink">Circle</span>
         </header>
         <PlanReveal roomId={roomId} participantId={participantId} isHost={false} />
+      </main>
+    );
+  }
+
+  // Order in progress — host is placing the order
+  if (ORDER_STATUSES.includes(status)) {
+    const orderLabel: Record<string, string> = {
+      ordering: "Host is reviewing the cart…",
+      confirming: "Waiting for host to place the order…",
+      tracking: "Order placed! Tracking delivery…",
+      done: "Order delivered. Enjoy!",
+    };
+    return (
+      <main className="min-h-screen bg-canvas flex flex-col items-center justify-center px-6 gap-6">
+        <p className="text-[11px] font-sans font-bold tracking-[0.4px] uppercase text-body-muted">
+          Circle
+        </p>
+        <motion.div
+          className="w-14 h-14 border border-ink"
+          animate={status === "done" ? { rotate: 0 } : { rotate: 360 }}
+          transition={{ repeat: status === "done" ? 0 : Infinity, duration: 3, ease: "linear" }}
+        />
+        <p className="font-display text-2xl text-ink text-center">
+          {status === "done" ? "Order delivered. Enjoy!" : "Order in progress"}
+        </p>
+        <p className="font-sans text-sm text-body-muted text-center">
+          {orderLabel[status] ?? status}
+        </p>
       </main>
     );
   }

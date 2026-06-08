@@ -74,6 +74,22 @@ def build_discover_graph(checkpointer=None):
     return b.compile(checkpointer=checkpointer)
 
 
+def build_order_graph(checkpointer=None):
+    """Segment 3 — /choose-plan: build_cart for current sub_order_idx → split_bill.
+
+    Leaves the cart populated (for place_food_order) and writes per-person split
+    amounts to the splits table. Status is set to 'confirming' by the runner once
+    this graph returns.
+    """
+    b = StateGraph(CircleState)
+    b.add_node("build_cart", build_cart.run)
+    b.add_node("split_bill", split_bill.run)
+    b.set_entry_point("build_cart")
+    b.add_edge("build_cart", "split_bill")
+    b.add_edge("split_bill", END)
+    return b.compile(checkpointer=checkpointer)
+
+
 # ── Full graph (reference / single-invocation tests) ──────────────────────────
 
 def _feasibility_router(state: CircleState) -> str:
