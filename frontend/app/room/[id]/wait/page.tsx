@@ -5,18 +5,20 @@ import { useParams, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import PlanReveal from "@/components/PlanReveal";
+import OrderTracking from "@/components/OrderTracking";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const PLAN_STATUSES = ["discovering", "choosing"];
-const ORDER_STATUSES = ["ordering", "confirming", "tracking", "done"];
+const ORDER_STATUSES = ["ordering", "confirming"];
+const TRACKING_STATUSES = ["tracking", "done"];
 
 export default function WaitPage() {
   const { id: roomId } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const participantId = searchParams.get("pid") ?? "";
 
-  const [participants, setParticipants] = useState<{ display_name: string; has_card: boolean }[]>([]);
+  const [participants, setParticipants] = useState<{ id: string; display_name: string; has_card: boolean; is_host: boolean }[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [kicked, setKicked] = useState(false);
   const [status, setStatus] = useState<string>("collecting");
@@ -50,8 +52,8 @@ export default function WaitPage() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "participants", filter: `room_id=eq.${roomId}` },
         (payload) => {
-          const p = payload.new as { display_name: string };
-          setParticipants((prev) => [...prev, { display_name: p.display_name, has_card: false }]);
+          const p = payload.new as { id: string; display_name: string; is_host: boolean };
+          setParticipants((prev) => [...prev, { id: p.id, display_name: p.display_name, has_card: false, is_host: p.is_host }]);
           setTotalCount((n) => n + 1);
         }
       )
@@ -93,6 +95,8 @@ export default function WaitPage() {
 
   const cardsIn = participants.filter((p) => p.has_card).length;
   const progress = totalCount > 0 ? cardsIn / totalCount : 0;
+  const hostParticipantId = participants.find((p) => p.is_host)?.id ?? "";
+  const nameByPid = Object.fromEntries(participants.map((p) => [p.id, p.display_name]));
 
   if (kicked) {
     return (
@@ -115,13 +119,28 @@ export default function WaitPage() {
     );
   }
 
+  // Live tracking — show stepper + split
+  if (TRACKING_STATUSES.includes(status)) {
+    return (
+      <main className="min-h-screen bg-canvas">
+        <header className="flex items-center justify-center px-6 py-4 border-b border-hairline">
+          <span className="font-sans font-bold text-sm tracking-[0.3px] text-ink">Circle</span>
+        </header>
+        <OrderTracking
+          roomId={roomId}
+          isHost={false}
+          hostParticipantId={hostParticipantId}
+          nameByPid={nameByPid}
+        />
+      </main>
+    );
+  }
+
   // Order in progress — host is placing the order
   if (ORDER_STATUSES.includes(status)) {
     const orderLabel: Record<string, string> = {
       ordering: "Host is reviewing the cart…",
       confirming: "Waiting for host to place the order…",
-      tracking: "Order placed! Tracking delivery…",
-      done: "Order delivered. Enjoy!",
     };
     return (
       <main className="min-h-screen bg-canvas flex flex-col items-center justify-center px-6 gap-6">
@@ -130,12 +149,10 @@ export default function WaitPage() {
         </p>
         <motion.div
           className="w-14 h-14 border border-ink"
-          animate={status === "done" ? { rotate: 0 } : { rotate: 360 }}
-          transition={{ repeat: status === "done" ? 0 : Infinity, duration: 3, ease: "linear" }}
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 3, ease: "linear" }}
         />
-        <p className="font-display text-2xl text-ink text-center">
-          {status === "done" ? "Order delivered. Enjoy!" : "Order in progress"}
-        </p>
+        <p className="font-display text-2xl text-ink text-center">Order in progress</p>
         <p className="font-sans text-sm text-body-muted text-center">
           {orderLabel[status] ?? status}
         </p>

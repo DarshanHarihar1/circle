@@ -430,5 +430,28 @@ def get_split(db: Session, split_id: str) -> Split | None:
 def mark_split_paid(db: Session, split_id: str) -> None:
     row = db.get(Split, split_id)
     if row:
-        row.paid = True
+        row.paid = not row.paid
         db.commit()
+
+
+# ── Placed-order tracking ─────────────────────────────────────────────────────
+
+def get_placed_order(db: Session, order_id: str) -> PlacedOrder | None:
+    return db.get(PlacedOrder, order_id)
+
+
+def update_placed_order_status(
+    db: Session,
+    order_id: str,
+    status: str,
+    eta_mins: int | None = None,
+) -> None:
+    row = db.get(PlacedOrder, order_id)
+    if not row:
+        return
+    row.status = status
+    if eta_mins is not None:
+        data = dict(row.sub_order_data) if row.sub_order_data else {}
+        data["eta_mins"] = eta_mins
+        row.sub_order_data = data
+    db.commit()

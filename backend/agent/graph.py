@@ -90,6 +90,19 @@ def build_order_graph(checkpointer=None):
     return b.compile(checkpointer=checkpointer)
 
 
+def build_track_graph(checkpointer=None):
+    """Segment 4 — after last order placed: poll Swiggy → broadcast status.
+
+    Runs until all placed_orders reach Delivered or Cancelled, then sets
+    room.status = 'done'.
+    """
+    b = StateGraph(CircleState)
+    b.add_node("track", track.run)
+    b.set_entry_point("track")
+    b.add_edge("track", END)
+    return b.compile(checkpointer=checkpointer)
+
+
 # ── Full graph (reference / single-invocation tests) ──────────────────────────
 
 def _feasibility_router(state: CircleState) -> str:

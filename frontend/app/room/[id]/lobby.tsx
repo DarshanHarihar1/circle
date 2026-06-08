@@ -11,6 +11,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { supabase } from "@/lib/supabase";
 import PlanReveal from "@/components/PlanReveal";
 import CartReview from "@/components/CartReview";
+import OrderTracking from "@/components/OrderTracking";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -87,7 +88,8 @@ export default function Lobby({
   const agentRunning = AGENT_STATUSES.includes(roomStatus);
   const showPlans = ["discovering", "choosing"].includes(roomStatus);
   const showCartLoading = roomStatus === "ordering";
-  const showCart = ["confirming", "tracking", "done"].includes(roomStatus);
+  const showCart = roomStatus === "confirming";
+  const showTracking = ["tracking", "done"].includes(roomStatus);
   const hostParticipantId = participants.find((p) => p.is_host)?.id ?? "";
   const nameByPid = Object.fromEntries(participants.map((p) => [p.id, p.display_name]));
 
@@ -434,9 +436,19 @@ export default function Lobby({
         </div>
       )}
 
-      {/* Cart review + order placement (confirming → tracking) */}
+      {/* Cart review + order placement (confirming) */}
       {showCart && (
         <CartReview
+          roomId={roomId}
+          isHost={true}
+          hostParticipantId={hostParticipantId}
+          nameByPid={nameByPid}
+        />
+      )}
+
+      {/* Live order tracking (tracking → done) */}
+      {showTracking && (
+        <OrderTracking
           roomId={roomId}
           isHost={true}
           hostParticipantId={hostParticipantId}
