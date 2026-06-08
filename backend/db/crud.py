@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session
 from .models import (
-    Candidate, CravingCard, HostToken, Participant, Plan, PlanVote, PrefSpec, Room,
+    Candidate, CravingCard, HostToken, Participant, Plan, PlanVote, PlacedOrder,
+    PrefSpec, Room, Split,
 )
 
 
@@ -327,3 +328,107 @@ def get_vote_counts(db: Session, room_id: str) -> dict[str, int]:
         for v in votes:
             counts[v.plan_id] = counts.get(v.plan_id, 0) + 1
     return counts
+
+
+# ── Chosen plan helpers ───────────────────────────────────────────────────────
+
+def get_chosen_plan(db: Session, room_id: str) -> Plan | None:
+    return db.query(Plan).filter(Plan.room_id == room_id, Plan.chosen == True).first()
+
+
+def plans_as_dicts(db: Session, room_id: str) -> list[dict]:
+    return [
+        {
+            "plan_id": p.id,
+            "kind": p.kind,
+            "sub_orders": p.sub_orders,
+            "total": p.total,
+            "satisfaction": float(p.satisfaction) if p.satisfaction is not None else 0.0,
+            "n_deliveries": p.n_deliveries,
+            "rationale": p.rationale or "",
+            "why_not_runner_up": p.why_not_runner_up or "",
+            "per_person_fit": p.per_person_fit or {},
+        }
+        for p in get_plans(db, room_id)
+    ]
+
+
+# ── Placed orders ─────────────────────────────────────────────────────────────
+
+def create_placed_order(
+    db: Session,
+    room_id: str,
+    plan_id: str,
+    swiggy_order_id: str | None,
+    restaurant_id: str,
+    restaurant_name: str,
+    sub_order_data: dict,
+) -> PlacedOrder:
+    row = PlacedOrder(
+        id=str(uuid.uuid4()),
+        room_id=room_id,
+        plan_id=plan_id,
+        swiggy_order_id=swiggy_order_id,
+        restaurant_id=restaurant_id,
+        restaurant_name=restaurant_name,
+        status="placed" if swiggy_order_id else "pending",
+        sub_order_data=sub_order_data,
+        placed_at=datetime.utcnow() if swiggy_order_id else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_placed_orders(db: Session, room_id: str) -> list[PlacedOrder]:
+    return db.query(PlacedOrder).filter(PlacedOrder.room_id == room_id).all()
+
+
+# ── Splits ────────────────────────────────────────────────────────────────────
+
+def upsert_split(
+    db: Session,
+    room_id: str,
+    participant_id: str,
+    amount: int,
+    upi_link: str | None = None,
+) -> Split:
+    existing = (
+        db.query(Split)
+        .filter(Split.room_id == room_id, Split.participant_id == participant_id)
+        .first()
+    )
+    if existing:
+        existing.amount = amount
+        if upi_link is not None:
+            existing.upi_link = upi_link
+        db.commit()
+        return existing
+    row = Split(
+        id=str(uuid.uuid4()),
+        room_id=room_id,
+        participant_id=participant_id,
+        amount=amount,
+        upi_link=upi_link,
+        paid=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_splits(db: Session, room_id: str) -> list[Split]:
+    return db.query(Split).filter(Split.room_id == room_id).all()
+
+
+def get_split(db: Session, split_id: str) -> Split | None:
+    return db.get(Split, split_id)
+
+
+def mark_split_paid(db: Session, split_id: str) -> None:
+    row = db.get(Split, split_id)
+    if row:
+        row.paid = True
+        db.commit()

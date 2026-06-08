@@ -73,6 +73,11 @@ class VoteBody(BaseModel):
 
 class ChoosePlanBody(BaseModel):
     plan_id: str
+    host_vpa: str | None = None
+
+
+class ConfirmOrderBody(BaseModel):
+    host_vpa: str | None = None
 
 
 def _plan_to_dict(p) -> dict:
@@ -347,9 +352,10 @@ def vote(room_id: str, body: VoteBody, db: Session = Depends(get_db)):
 
 
 @router.post("/{room_id}/choose-plan")
-def choose_plan(
+async def choose_plan(
     room_id: str,
     body: ChoosePlanBody,
+    background_tasks: BackgroundTasks,
     host_uid: str = Depends(_require_host),
     db: Session = Depends(get_db),
 ):
@@ -364,5 +370,82 @@ def choose_plan(
 
     crud.set_plan_chosen(db, room_id, body.plan_id)
     crud.set_room_status(db, room_id, "ordering")
-    # The order segment (build_cart → split → confirm) is Phase 5.
+
+    access_token = _get_valid_token(db, host_uid)
+    from agent.runner import run_build_cart
+    background_tasks.add_task(run_build_cart, room_id, access_token, body.host_vpa)
+
     return {"ok": True, "status": "ordering", "chosen_plan_id": body.plan_id}
+
+
+# ── Phase 5: Cart, order placement, splits ─────────────────────────────────────
+
+@router.get("/{room_id}/splits")
+def get_splits(room_id: str, db: Session = Depends(get_db)):
+    splits = crud.get_splits(db, room_id)
+    participants = {p.id: p.display_name for p in crud.get_participants(db, room_id)}
+    return {
+        "splits": [
+            {
+                "id": s.id,
+                "participant_id": s.participant_id,
+                "display_name": participants.get(s.participant_id, "Guest"),
+                "amount": s.amount,
+                "upi_link": s.upi_link,
+                "paid": s.paid,
+            }
+            for s in splits
+        ]
+    }
+
+
+@router.patch("/{room_id}/splits/{split_id}")
+def mark_split_paid(
+    room_id: str,
+    split_id: str,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    room = crud.get_room(db, room_id)
+    if not room or room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can mark splits paid")
+    split = crud.get_split(db, split_id)
+    if not split or split.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Split not found")
+    crud.mark_split_paid(db, split_id)
+    return {"ok": True}
+
+
+@router.post("/{room_id}/confirm-order")
+async def confirm_order(
+    room_id: str,
+    body: ConfirmOrderBody,
+    background_tasks: BackgroundTasks,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    """Host confirms — places the Swiggy order for the current sub_order."""
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can place the order")
+    if room.status not in ("ordering", "confirming"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Room not ready to place order (status={room.status})",
+        )
+
+    chosen_plan = crud.get_chosen_plan(db, room_id)
+    if not chosen_plan:
+        raise HTTPException(status_code=404, detail="No plan has been chosen")
+
+    idx = len(crud.get_placed_orders(db, room_id))
+    if idx >= len(chosen_plan.sub_orders):
+        raise HTTPException(status_code=409, detail="All sub-orders already placed")
+
+    access_token = _get_valid_token(db, host_uid)
+    from agent.runner import place_order_and_advance
+    background_tasks.add_task(place_order_and_advance, room_id, access_token, body.host_vpa)
+
+    return {"ok": True, "sub_order_index": idx}
