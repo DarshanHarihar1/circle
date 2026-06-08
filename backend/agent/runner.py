@@ -18,7 +18,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 import json
 import re
 
-from agent.graph import build_parse_graph, build_discover_graph, build_order_graph
+from agent.graph import build_parse_graph, build_discover_graph, build_order_graph, build_track_graph
 from agent.state import CircleState
 from config import settings
 from db import crud
@@ -246,10 +246,53 @@ async def place_order_and_advance(
             await run_build_cart(room_id, access_token, host_vpa)
         else:
             crud.set_room_status(db, room_id, "tracking")
+            await run_track(room_id, access_token)
 
     except Exception as exc:
         logger.error(
             "place_order_and_advance failed for room %s: %s", room_id, exc, exc_info=True
         )
+    finally:
+        db.close()
+
+
+async def run_track(room_id: str, access_token: str) -> None:
+    """
+    Segment 4: poll Swiggy for order status → update placed_orders → broadcast.
+    Runs until all orders are terminal (Delivered / Cancelled).
+    """
+    db = SessionLocal()
+    try:
+        room = crud.get_room(db, room_id)
+        if not room:
+            return
+
+        placed = crud.get_placed_orders(db, room_id)
+        state = CircleState(
+            room_id=room_id,
+            host_user_id=room.host_user_id,
+            address_id=room.address_id or "",
+            placed_orders=[
+                {"id": o.id, "swiggy_order_id": o.swiggy_order_id,
+                 "restaurant_name": o.restaurant_name}
+                for o in placed
+            ],
+        )
+
+        async with MultiServerMCPClient({
+            "food": {
+                "url": FOOD_URL,
+                "transport": "streamable_http",
+                "headers": {"Authorization": f"Bearer {access_token}"},
+            }
+        }) as mcp:
+            tools_by_name = {t.name: t for t in await mcp.get_tools()}
+            graph = build_track_graph()
+            await graph.ainvoke(state, _config(room_id, db, tools_by_name))
+
+        logger.info("run_track complete for room %s", room_id)
+    except Exception as exc:
+        logger.error("run_track failed for room %s: %s", room_id, exc, exc_info=True)
+        crud.set_room_status(db, room_id, "done")
     finally:
         db.close()

@@ -416,6 +416,28 @@ def mark_split_paid(
     return {"ok": True}
 
 
+@router.get("/{room_id}/placed-orders")
+def get_placed_orders(room_id: str, db: Session = Depends(get_db)):
+    orders = crud.get_placed_orders(db, room_id)
+    return {
+        "placed_orders": [
+            {
+                "id": o.id,
+                "swiggy_order_id": o.swiggy_order_id,
+                "restaurant_id": o.restaurant_id,
+                "restaurant_name": o.restaurant_name,
+                "status": o.status,
+                "placed_at": o.placed_at.isoformat() if o.placed_at else None,
+                "eta_mins": (
+                    o.sub_order_data.get("eta_mins")
+                    if isinstance(o.sub_order_data, dict) else None
+                ),
+            }
+            for o in orders
+        ]
+    }
+
+
 @router.post("/{room_id}/confirm-order")
 async def confirm_order(
     room_id: str,
