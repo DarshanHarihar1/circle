@@ -56,16 +56,21 @@ def build_parse_graph(checkpointer=None):
 
 
 def build_discover_graph(checkpointer=None):
-    """Segment 2 — /approve-prefs: discover restaurants → score feasibility.
+    """Segment 2 — /approve-prefs: discover → feasibility → build plans → price.
 
-    (Phase 4 extends this segment with build_plans → price_plans.)
+    Produces the ranked, priced plan shortlist and ends at the present_options
+    gate (the host then votes / chooses).
     """
     b = StateGraph(CircleState)
     b.add_node("discover", discover.run)
     b.add_node("feasibility", feasibility.run)
+    b.add_node("build_plans", build_plans.run)
+    b.add_node("price_plans", price_plans.run)
     b.set_entry_point("discover")
     b.add_edge("discover", "feasibility")
-    b.add_edge("feasibility", END)
+    b.add_edge("feasibility", "build_plans")
+    b.add_edge("build_plans", "price_plans")
+    b.add_edge("price_plans", END)
     return b.compile(checkpointer=checkpointer)
 
 

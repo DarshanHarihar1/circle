@@ -66,6 +66,32 @@ class ApprovePrefsBody(BaseModel):
     edits: list[dict] = []   # optional host edits — reserved for Phase 4
 
 
+class VoteBody(BaseModel):
+    participant_id: str
+    plan_id: str
+
+
+class ChoosePlanBody(BaseModel):
+    plan_id: str
+
+
+def _plan_to_dict(p) -> dict:
+    return {
+        "id": p.id,
+        "kind": p.kind,
+        "sub_orders": p.sub_orders,
+        "total": p.total,
+        "satisfaction": float(p.satisfaction) if p.satisfaction is not None else None,
+        "n_deliveries": p.n_deliveries,
+        "notes": p.notes,
+        "rationale": p.rationale,
+        "why_not_runner_up": p.why_not_runner_up,
+        "per_person_fit": p.per_person_fit or {},
+        "rank": p.rank,
+        "chosen": p.chosen,
+    }
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("")
@@ -289,3 +315,54 @@ async def approve_prefs(
     background_tasks.add_task(run_discover, room_id, access_token)
 
     return {"ok": True, "status": "discovering"}
+
+
+# ── Phase 4: Plans, voting & selection ────────────────────────────────────────
+
+@router.get("/{room_id}/plans")
+def get_plans(room_id: str, db: Session = Depends(get_db)):
+    plans = crud.get_plans(db, room_id)
+    counts = crud.get_vote_counts(db, room_id)
+    votes = crud.get_votes(db, room_id)
+    return {
+        "plans": [_plan_to_dict(p) for p in plans],
+        "vote_counts": counts,
+        "votes": votes,
+    }
+
+
+@router.post("/{room_id}/vote")
+def vote(room_id: str, body: VoteBody, db: Session = Depends(get_db)):
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    p = crud.get_participant(db, body.participant_id)
+    if not p or p.room_id != room_id:
+        raise HTTPException(status_code=403, detail="Participant not in this room")
+    plan = crud.get_plan(db, body.plan_id)
+    if not plan or plan.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Plan not found in this room")
+    crud.add_plan_vote(db, body.participant_id, body.plan_id)
+    return {"ok": True, "vote_counts": crud.get_vote_counts(db, room_id)}
+
+
+@router.post("/{room_id}/choose-plan")
+def choose_plan(
+    room_id: str,
+    body: ChoosePlanBody,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can choose the plan")
+    plan = crud.get_plan(db, body.plan_id)
+    if not plan or plan.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Plan not found in this room")
+
+    crud.set_plan_chosen(db, room_id, body.plan_id)
+    crud.set_room_status(db, room_id, "ordering")
+    # The order segment (build_cart → split → confirm) is Phase 5.
+    return {"ok": True, "status": "ordering", "chosen_plan_id": body.plan_id}
