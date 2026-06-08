@@ -119,19 +119,32 @@ export default function CartReview({
     return () => clearInterval(t);
   }, [roomId]);
 
+  const [placeError, setPlaceError] = useState<string | null>(null);
+
   async function handlePlaceOrder() {
     setPlacing(true);
     setConfirmOpen(false);
+    setPlaceError(null);
     try {
-      await fetch(`${API_URL}/rooms/${roomId}/confirm-order`, {
+      const res = await fetch(`${API_URL}/rooms/${roomId}/confirm-order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ host_vpa: hostVpa || null }),
       });
+      if (!res.ok) {
+        // Do NOT advance the sub-order index — the backend rejected placement,
+        // so the next cart must not be shown as if this order succeeded.
+        const body = await res.json().catch(() => ({}));
+        setPlaceError(body.detail || "Could not place the order. Please try again.");
+        return;
+      }
+      // Only advance once the order is actually accepted. The backend places the
+      // order in the background and drives the room into tracking; for a
+      // multi-restaurant plan it returns to confirming for the next sub-order.
       setSubOrderIdx((n) => n + 1);
     } catch {
-      /* silent — status polling will reflect the change */
+      setPlaceError("Network error while placing the order. Please try again.");
     } finally {
       setPlacing(false);
     }
@@ -266,6 +279,11 @@ export default function CartReview({
       {/* Place Order — host only */}
       {isHost && (
         <div className="pt-2">
+          {placeError && (
+            <p className="font-sans text-xs text-ink border border-ink px-3 py-2 mb-2">
+              {placeError}
+            </p>
+          )}
           <Button
             onClick={() => setConfirmOpen(true)}
             disabled={placing}

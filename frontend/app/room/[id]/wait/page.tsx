@@ -9,6 +9,7 @@ import OrderTracking from "@/components/OrderTracking";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+const WORKING_STATUSES = ["activated", "planning"];
 const PLAN_STATUSES = ["discovering", "choosing"];
 const ORDER_STATUSES = ["ordering", "confirming"];
 const TRACKING_STATUSES = ["tracking", "done"];
@@ -132,6 +133,31 @@ export default function WaitPage() {
           hostParticipantId={hostParticipantId}
           nameByPid={nameByPid}
         />
+      </main>
+    );
+  }
+
+  // Agent is parsing prefs / host is reviewing them — all cards are already in,
+  // so the default "waiting for cards" screen would be misleading here.
+  if (WORKING_STATUSES.includes(status)) {
+    return (
+      <main className="min-h-screen bg-canvas flex flex-col items-center justify-center px-6 gap-6">
+        <p className="text-[11px] font-sans font-bold tracking-[0.4px] uppercase text-body-muted">
+          Circle
+        </p>
+        <motion.div
+          className="w-14 h-14 border border-ink"
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 3, ease: "linear" }}
+        />
+        <p className="font-display text-2xl text-ink text-center">
+          Everyone&apos;s in.
+        </p>
+        <p className="font-sans text-sm text-body-muted text-center">
+          {status === "planning"
+            ? "The host is reviewing everyone's preferences…"
+            : "Reading the room and parsing cravings…"}
+        </p>
       </main>
     );
   }

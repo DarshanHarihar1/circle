@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .models import (
     Candidate, CravingCard, HostToken, Participant, Plan, PlanVote, PlacedOrder,
@@ -302,14 +303,21 @@ def add_plan_vote(db: Session, participant_id: str, plan_id: str) -> None:
         return
     sibling_ids = [p.id for p in db.query(Plan).filter(Plan.room_id == row.room_id).all()]
     if sibling_ids:
+        # synchronize_session="fetch" keeps the identity map consistent so the
+        # re-check below doesn't see a stale (just-deleted) PlanVote instance.
         (db.query(PlanVote)
          .filter(PlanVote.participant_id == participant_id,
                  PlanVote.plan_id.in_(sibling_ids))
-         .delete(synchronize_session=False))
-    existing = db.get(PlanVote, (participant_id, plan_id))
-    if not existing:
+         .delete(synchronize_session="fetch"))
+        db.flush()
+    if not db.get(PlanVote, (participant_id, plan_id)):
         db.add(PlanVote(participant_id=participant_id, plan_id=plan_id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent vote from the same participant raced us to the same PK.
+        # The row exists, which is exactly the desired end state — treat as success.
+        db.rollback()
 
 
 def get_votes(db: Session, room_id: str) -> list[dict]:
@@ -427,11 +435,18 @@ def get_split(db: Session, split_id: str) -> Split | None:
     return db.get(Split, split_id)
 
 
-def mark_split_paid(db: Session, split_id: str) -> None:
+def mark_split_paid(db: Session, split_id: str, paid: bool | None = None) -> bool | None:
+    """Set a split's paid flag. When `paid` is None, toggle (legacy behaviour).
+
+    Passing an explicit bool makes the operation idempotent — safe under retries
+    and double-taps, which a blind toggle is not. Returns the resulting state.
+    """
     row = db.get(Split, split_id)
-    if row:
-        row.paid = not row.paid
-        db.commit()
+    if not row:
+        return None
+    row.paid = (not row.paid) if paid is None else paid
+    db.commit()
+    return row.paid
 
 
 # ── Placed-order tracking ─────────────────────────────────────────────────────

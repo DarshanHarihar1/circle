@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import confetti from "canvas-confetti";
 import { supabase } from "@/lib/supabase";
@@ -94,12 +94,17 @@ function OrderTracker({
 }) {
   const [status, setStatus] = useState(order.status);
   const [etaMins, setEtaMins] = useState<number | null>(order.eta_mins);
-  const [prevEta, setPrevEta] = useState<number | null>(null);
   const [deliveredBanner, setDeliveredBanner] = useState(
     order.status.toLowerCase() === "delivered"
   );
+  // Guards the one-shot confetti without forcing the subscription effect to
+  // re-run (and tear down / re-open the channel) on every tracking update.
+  const firedConfetti = useRef(order.status.toLowerCase() === "delivered");
 
-  // Subscribe to placed_orders changes for this order
+  // Subscribe to placed_orders changes for this order. Depends only on order.id
+  // so the channel is opened once and survives every incoming update — listing
+  // status/eta/banner here would resubscribe on each event and drop messages
+  // during the resubscribe window.
   useEffect(() => {
     const channel = supabase
       .channel(`order-${order.id}`)
@@ -116,17 +121,16 @@ function OrderTracker({
             status: string;
             sub_order_data: Record<string, unknown>;
           };
-          const newStatus = updated.status ?? status;
           const newEta =
             typeof updated.sub_order_data?.eta_mins === "number"
               ? (updated.sub_order_data.eta_mins as number)
               : null;
 
-          setPrevEta(etaMins);
-          setStatus(newStatus);
+          if (updated.status) setStatus(updated.status);
           if (newEta !== null) setEtaMins(newEta);
 
-          if (newStatus.toLowerCase() === "delivered" && !deliveredBanner) {
+          if (updated.status?.toLowerCase() === "delivered" && !firedConfetti.current) {
+            firedConfetti.current = true;
             setDeliveredBanner(true);
             confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
           }
@@ -136,7 +140,7 @@ function OrderTracker({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [order.id, status, etaMins, deliveredBanner]);
+  }, [order.id]);
 
   const currentStep = stepIndex(status);
   const isCancelled = status.toLowerCase() === "cancelled";
@@ -311,13 +315,19 @@ export default function OrderTracking({
   }, [roomId]);
 
   async function markSplitPaid(splitId: string) {
+    // Send the explicit target state (not a blind toggle) so a retry or
+    // double-tap is idempotent and can't flip a paid split back to unpaid.
+    const current = splits.find((s) => s.id === splitId);
+    const target = !(current?.paid ?? false);
     // Optimistic update
     setSplits((prev) =>
-      prev.map((s) => (s.id === splitId ? { ...s, paid: !s.paid } : s))
+      prev.map((s) => (s.id === splitId ? { ...s, paid: target } : s))
     );
     await fetch(`${API_URL}/rooms/${roomId}/splits/${splitId}`, {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       credentials: "include",
+      body: JSON.stringify({ paid: target }),
     }).catch(() => {});
     // Re-fetch to sync
     const res = await fetch(`${API_URL}/rooms/${roomId}/splits`).catch(() => null);

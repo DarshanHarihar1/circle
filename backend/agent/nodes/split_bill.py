@@ -60,15 +60,26 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
     if idx >= len(sub_orders):
         return {}
 
-    sub = sub_orders[idx]
-    splits = compute_split(sub)
+    # A participant can have items in more than one sub-order of a multi-restaurant
+    # plan. Each sub-order's split is computed independently, then summed per
+    # participant so the persisted split reflects everything they owe across the
+    # whole plan — not just the most recently built cart. Accumulating across all
+    # priced sub-orders [0..idx] (rather than adding to the stored row) keeps this
+    # idempotent under retries: re-running any idx recomputes the same totals.
+    per_participant: dict[str, int] = {}
+    for j in range(idx + 1):
+        for s in compute_split(sub_orders[j]):
+            per_participant[s["participant_id"]] = (
+                per_participant.get(s["participant_id"], 0) + s["amount"]
+            )
 
-    for s in splits:
-        upi = make_upi_link(host_vpa, s["amount"], state.room_id) if host_vpa else None
-        crud.upsert_split(db, state.room_id, s["participant_id"], s["amount"], upi)
+    for pid, amount in per_participant.items():
+        upi = make_upi_link(host_vpa, amount, state.room_id) if host_vpa else None
+        crud.upsert_split(db, state.room_id, pid, amount, upi)
 
+    splits = [{"participant_id": pid, "amount": amt} for pid, amt in per_participant.items()]
     logger.info(
-        "split_bill: %d splits written for room %s sub_order %d (total=%d)",
-        len(splits), state.room_id, idx, sum(s["amount"] for s in splits),
+        "split_bill: %d splits written for room %s through sub_order %d (total=%d)",
+        len(splits), state.room_id, idx, sum(per_participant.values()),
     )
     return {"split": splits}

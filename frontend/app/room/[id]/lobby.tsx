@@ -165,6 +165,21 @@ export default function Lobby({
           setRoomStatus("planning");
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${roomId}` },
+        (payload) => {
+          // Authoritative status source — the agent advances the room server-side
+          // through planning → discovering → … → done. Relying only on the
+          // optimistic local set + a poll (which is gated off in `collecting`)
+          // would leave the host stuck if the transition happened elsewhere.
+          const room = payload.new as { status?: string };
+          if (room.status) {
+            setRoomStatus(room.status);
+            if (room.status === "planning") fetchPrefSpecs();
+          }
+        }
+      )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -353,7 +368,7 @@ export default function Lobby({
                         {spec.allergies.map((a) => (
                           <span
                             key={a}
-                            className="text-xs border border-[#cc0000] text-[#cc0000] px-1.5 py-0.5 font-sans"
+                            className="text-xs border border-ink text-ink bg-canvas-soft font-bold px-1.5 py-0.5 font-sans"
                           >
                             {a}
                           </span>
@@ -589,7 +604,7 @@ export default function Lobby({
                 <li key={addr.id}>
                   <button
                     onClick={() => pickAddress(addr)}
-                    className="w-full text-left py-3 px-1 hover:bg-zinc-50 transition-colors"
+                    className="w-full text-left py-3 px-1 hover:bg-canvas-soft transition-colors"
                   >
                     <p className="font-sans font-bold text-sm text-ink">{addr.label}</p>
                     <p className="font-sans text-xs text-body-muted mt-0.5 line-clamp-1">{addr.address}</p>
