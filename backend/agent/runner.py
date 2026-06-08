@@ -96,6 +96,8 @@ async def run_discover(room_id: str, access_token: str) -> None:
     except Exception as exc:
         logger.error("run_discover failed for room %s: %s", room_id, exc, exc_info=True)
         crud.set_room_status(db, room_id, "planning")  # let the host retry approve
+        if _is_auth_error(exc):
+            await _broadcast_auth_expired(room_id)
     finally:
         db.close()
 
@@ -156,23 +158,70 @@ async def run_build_cart(
     except Exception as exc:
         logger.error("run_build_cart failed for room %s: %s", room_id, exc, exc_info=True)
         crud.set_room_status(db, room_id, "ordering")
+        if _is_auth_error(exc):
+            await _broadcast_auth_expired(room_id)
     finally:
         db.close()
+
+
+_ORDER_ID_KEYS = ("orderId", "order_id", "id", "swiggyOrderId", "orderID")
+
+
+def _find_order_id(obj) -> str | None:
+    """Recursively search a decoded JSON structure for an order-id field.
+
+    Swiggy's place_food_order response is often nested (e.g. {"data": {"orderId": ...}})
+    or a list, so a flat top-level key scan misses it and we'd persist a null
+    swiggy_order_id — which silently disables tracking.
+    """
+    if isinstance(obj, dict):
+        for key in _ORDER_ID_KEYS:
+            if obj.get(key):
+                return str(obj[key])
+        for value in obj.values():
+            found = _find_order_id(value)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_order_id(item)
+            if found:
+                return found
+    return None
 
 
 def _parse_swiggy_order_id(raw) -> str | None:
     text = str(raw)
     try:
-        data = json.loads(text)
-        for key in ("orderId", "order_id", "id", "swiggyOrderId", "orderID"):
-            if key in data and data[key]:
-                return str(data[key])
+        found = _find_order_id(json.loads(text))
+        if found:
+            return found
     except Exception:
         pass
     m = re.search(r"(?:order[._-]?id)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9_-]+)", text, re.I)
     if m:
         return m.group(1)
     return None
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "401" in s or "unauthorized" in s
+
+
+async def _broadcast_auth_expired(room_id: str) -> None:
+    """Tell the room the host's Swiggy session expired so the UI prompts re-auth.
+
+    Mirrors the tracking node's behaviour for the other segments (discover, cart
+    build, placement) which previously only logged a generic failure on a 401.
+    """
+    from agent.nodes.track import _broadcast
+    await _broadcast(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_SERVICE_ROLE_KEY,
+        room_id,
+        {"event": "auth:expired", "message": "Host must reconnect Swiggy"},
+    )
 
 
 async def place_order_and_advance(
@@ -252,6 +301,12 @@ async def place_order_and_advance(
         logger.error(
             "place_order_and_advance failed for room %s: %s", room_id, exc, exc_info=True
         )
+        # Placement failed AFTER the host confirmed. Reset to a state the host can
+        # retry from instead of leaving the room stuck on a spinner, and surface
+        # the reason (expired token vs. generic error) to the UI.
+        crud.set_room_status(db, room_id, "confirming")
+        if _is_auth_error(exc):
+            await _broadcast_auth_expired(room_id)
     finally:
         db.close()
 

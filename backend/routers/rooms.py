@@ -80,6 +80,10 @@ class ConfirmOrderBody(BaseModel):
     host_vpa: str | None = None
 
 
+class MarkSplitPaidBody(BaseModel):
+    paid: bool | None = None   # explicit set; None toggles (legacy)
+
+
 def _plan_to_dict(p) -> dict:
     return {
         "id": p.id,
@@ -368,6 +372,15 @@ async def choose_plan(
     if not plan or plan.room_id != room_id:
         raise HTTPException(status_code=404, detail="Plan not found in this room")
 
+    # Plans are presented to the host during discovering (written mid-run) and
+    # choosing. Block re-triggering once the order flow has started so a replay
+    # can't reset a chosen plan or kick off a second cart build mid-placement.
+    if room.status not in ("discovering", "choosing"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan can only be chosen while voting (status={room.status})",
+        )
+
     crud.set_plan_chosen(db, room_id, body.plan_id)
     crud.set_room_status(db, room_id, "ordering")
 
@@ -403,6 +416,7 @@ def get_splits(room_id: str, db: Session = Depends(get_db)):
 def mark_split_paid(
     room_id: str,
     split_id: str,
+    body: MarkSplitPaidBody = MarkSplitPaidBody(),
     host_uid: str = Depends(_require_host),
     db: Session = Depends(get_db),
 ):
@@ -412,8 +426,8 @@ def mark_split_paid(
     split = crud.get_split(db, split_id)
     if not split or split.room_id != room_id:
         raise HTTPException(status_code=404, detail="Split not found")
-    crud.mark_split_paid(db, split_id)
-    return {"ok": True}
+    paid = crud.mark_split_paid(db, split_id, body.paid)
+    return {"ok": True, "paid": paid}
 
 
 @router.get("/{room_id}/placed-orders")

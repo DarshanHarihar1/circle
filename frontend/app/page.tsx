@@ -76,7 +76,7 @@ export default function Home() {
         </Button>
         <Button
           variant="outline"
-          className="bg-canvas text-ink border-ink hover:bg-zinc-50 font-sans font-bold text-sm tracking-[0.3px] px-5 py-3 h-auto"
+          className="bg-canvas text-ink border-ink hover:bg-canvas-soft font-sans font-bold text-sm tracking-[0.3px] px-5 py-3 h-auto"
         >
           How it works
         </Button>
@@ -100,7 +100,7 @@ export default function Home() {
             autoFocus
             className="mt-1"
           />
-          {error && <p className="text-sm text-red-600 font-sans">{error}</p>}
+          {error && <p className="text-sm text-ink font-bold font-sans">{error}</p>}
           <Button
             onClick={handleCreate}
             disabled={!name.trim() || loading}

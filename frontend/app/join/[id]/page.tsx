@@ -24,7 +24,7 @@ function TagInput({
   tags: string[];
   onChange: (t: string[]) => void;
   placeholder: string;
-  variant: "red" | "grey";
+  variant: "alert" | "muted";
 }) {
   const [input, setInput] = useState("");
   function add() {
@@ -38,9 +38,9 @@ function TagInput({
         <span
           key={t}
           className={`flex items-center gap-1 text-xs font-sans px-2 py-0.5 border ${
-            variant === "red"
-              ? "border-red-400 text-red-700 bg-red-50"
-              : "border-hairline text-ink bg-zinc-50"
+            variant === "alert"
+              ? "border-ink text-ink bg-canvas-soft font-bold"
+              : "border-hairline text-ink bg-canvas-soft"
           }`}
         >
           {t}
@@ -62,7 +62,7 @@ function TagInput({
         onBlur={add}
         placeholder={placeholder}
         className={`text-xs font-sans border-b bg-transparent outline-none py-0.5 min-w-[80px] ${
-          variant === "red" ? "border-red-300 placeholder-red-300" : "border-hairline"
+          variant === "alert" ? "border-ink placeholder-body-muted" : "border-hairline"
         }`}
       />
     </div>
@@ -284,14 +284,14 @@ export default function JoinPage() {
 
             {/* Allergies */}
             <div className="flex flex-col gap-2">
-              <Label className="font-sans text-sm font-bold text-red-600">
+              <Label className="font-sans text-sm font-bold text-ink">
                 ⚠ Allergies — these will never appear in your order
               </Label>
               <TagInput
                 tags={allergies}
                 onChange={setAllergies}
                 placeholder="add allergy, press Enter"
-                variant="red"
+                variant="alert"
               />
             </div>
 
@@ -304,7 +304,7 @@ export default function JoinPage() {
                 tags={dealBreakers}
                 onChange={setDealBreakers}
                 placeholder="add item, press Enter"
-                variant="grey"
+                variant="muted"
               />
             </div>
 

@@ -79,23 +79,24 @@ export default function PlanReveal({
     return () => clearInterval(t);
   }, [ready]);
 
-  // Poll + realtime
+  const chosen = plans.find((p) => p.chosen);
+
+  // Poll + realtime. Stop the 3s poll once a plan is locked in — realtime still
+  // covers the (terminal) chosen flip, so we don't need to keep hammering the API.
   useEffect(() => {
     fetchPlans();
-    const poll = setInterval(fetchPlans, 3000);
+    const poll = chosen ? null : setInterval(fetchPlans, 3000);
     const channel = supabase
       .channel(`plans-${roomId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "plans", filter: `room_id=eq.${roomId}` }, fetchPlans)
       .on("postgres_changes", { event: "*", schema: "public", table: "plan_votes" }, fetchPlans)
       .subscribe();
     return () => {
-      clearInterval(poll);
+      if (poll) clearInterval(poll);
       supabase.removeChannel(channel);
     };
-  }, [roomId, fetchPlans]);
+  }, [roomId, fetchPlans, chosen]);
 
-  // Stop polling once chosen
-  const chosen = plans.find((p) => p.chosen);
   const myVote = votes.find((v) => v.participant_id === participantId);
 
   async function vote(planId: string) {
