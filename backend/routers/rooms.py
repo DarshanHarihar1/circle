@@ -66,6 +66,15 @@ class ApprovePrefsBody(BaseModel):
     edits: list[dict] = []   # optional host edits — reserved for Phase 4
 
 
+class PrefSpecEditBody(BaseModel):
+    veg: str
+    budget_max: int | None = None
+    allergies: list[str] = []
+    excludes: list[str] = []
+    soft: list[str] = []
+    must_have: str | None = None
+
+
 class VoteBody(BaseModel):
     participant_id: str
     plan_id: str
@@ -289,11 +298,44 @@ def get_pref_specs(
                 "allergies": list(s.allergies) if s.allergies else [],
                 "excludes": list(s.excludes) if s.excludes else [],
                 "soft": list(s.soft) if s.soft else [],
+                "must_have": s.must_have,
                 "approved": s.approved,
             }
             for s in specs
         ]
     }
+
+
+@router.patch("/{room_id}/pref-specs/{participant_id}")
+def edit_pref_spec(
+    room_id: str,
+    participant_id: str,
+    body: PrefSpecEditBody,
+    host_uid: str = Depends(_require_host),
+    db: Session = Depends(get_db),
+):
+    room = crud.get_room(db, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.host_user_id != host_uid:
+        raise HTTPException(status_code=403, detail="Only the host can edit preferences")
+    if room.status != "planning":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Preferences can only be edited before approval (status={room.status})",
+        )
+    veg = body.veg if body.veg in ("veg", "non_veg", "either") else "either"
+    updated = crud.update_pref_spec(db, participant_id, {
+        "veg": veg,
+        "budget_max": body.budget_max,
+        "allergies": body.allergies,
+        "excludes": body.excludes,
+        "soft": body.soft,
+        "must_have": body.must_have,
+    })
+    if not updated:
+        raise HTTPException(status_code=404, detail="Preference spec not found")
+    return {"ok": True}
 
 
 @router.post("/{room_id}/approve-prefs")

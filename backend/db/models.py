@@ -57,6 +57,7 @@ class PrefSpec(Base):
     allergies      = Column(JSONB, nullable=False, default=list)
     excludes       = Column(JSONB, nullable=False, default=list)
     soft           = Column(JSONB, nullable=False, default=list)
+    must_have      = Column(Text)
     raw_chat       = Column(Text, nullable=False, default="")
     approved       = Column(Boolean, nullable=False, default=False)
     updated_at     = Column(TIMESTAMP(timezone=True), server_default=func.now())

@@ -7,11 +7,13 @@ import { toast, Toaster } from "sonner";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { supabase } from "@/lib/supabase";
 import PlanReveal from "@/components/PlanReveal";
 import CartReview from "@/components/CartReview";
 import OrderTracking from "@/components/OrderTracking";
+import CravingCardForm, { type CravingCardData } from "@/components/CravingCardForm";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -47,6 +49,7 @@ type PrefSpec = {
   allergies: string[];
   excludes: string[];
   soft: string[];
+  must_have: string | null;
   approved: boolean;
 };
 
@@ -78,12 +81,25 @@ export default function Lobby({
   const [activating, setActivating] = useState(false);
   const [prefSpecs, setPrefSpecs] = useState<PrefSpec[]>([]);
   const [approving, setApproving] = useState(false);
+  const [editingPid, setEditingPid] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Host craving card sheet
+  const [cardSheetOpen, setCardSheetOpen] = useState(false);
+  const [submittingCard, setSubmittingCard] = useState(false);
 
   const participantsRef = useRef(participants);
   participantsRef.current = participants;
 
   const joinUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/join/${roomId}`;
   const cardsSubmitted = participants.filter((p) => p.has_card).length;
+  const hostHasCard = participants.find((p) => p.is_host)?.has_card ?? false;
+
+  // Auto-open card sheet if host hasn't submitted yet
+  useEffect(() => {
+    if (!hostHasCard) setCardSheetOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const allSubmitted = participants.length > 0 && cardsSubmitted === participants.length;
   const agentRunning = AGENT_STATUSES.includes(roomStatus);
   const showPlans = ["discovering", "choosing"].includes(roomStatus);
@@ -278,6 +294,67 @@ export default function Lobby({
     }
   }
 
+  async function handleSubmitHostCard(card: CravingCardData) {
+    setSubmittingCard(true);
+    try {
+      const res = await fetch(`${API_URL}/rooms/${roomId}/cards`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ participant_id: hostParticipantId, ...card }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.detail || "Could not submit card");
+        return;
+      }
+      setCardSheetOpen(false);
+      toast("Your card is in!");
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSubmittingCard(false);
+    }
+  }
+
+  async function handleSavePrefEdit(participantId: string, card: CravingCardData) {
+    setSavingEdit(true);
+    try {
+      // Map the card form fields back onto pref-spec fields.
+      const softFromVibe = (card.cuisine_vibe || "")
+        .split(/[,/]| and |&/i)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const must = card.must_have?.trim() || null;
+      const soft = [...softFromVibe, ...(must ? [must] : [])];
+      const res = await fetch(`${API_URL}/rooms/${roomId}/pref-specs/${participantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          veg: card.veg,
+          budget_max: card.budget_max,
+          allergies: card.allergies,
+          excludes: card.deal_breakers,
+          soft,
+          must_have: must,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.detail || "Could not save changes");
+        return;
+      }
+      setEditingPid(null);
+      await fetchPrefSpecs();
+      toast("Preferences updated");
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
   function copyLink() {
     navigator.clipboard.writeText(joinUrl);
     toast("Link copied");
@@ -291,7 +368,7 @@ export default function Lobby({
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
-      <Toaster position="top-right" />
+      <Toaster position="top-right" offset={{ top: 72 }} />
 
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-hairline">
@@ -336,71 +413,112 @@ export default function Lobby({
             exit={{ opacity: 0 }}
             className="border-b border-hairline"
           >
-            <div className="px-6 pt-5 pb-2">
-              <p className="font-display text-xl text-ink mb-1">Preferences parsed</p>
-              <p className="font-sans text-sm text-body-muted">
-                Review what the agent understood from each card. Approve to continue.
-              </p>
+            <div className="px-6 pt-5 pb-3 flex items-baseline justify-between">
+              <div>
+                <p className="font-display text-xl text-ink mb-1">Preferences parsed</p>
+                <p className="font-sans text-sm text-body-muted">
+                  Review what the agent understood from each card. Approve to continue.
+                </p>
+              </div>
+              <span className="font-sans text-xs text-body-muted whitespace-nowrap">
+                {prefSpecs.length} {prefSpecs.length === 1 ? "card" : "cards"}
+              </span>
             </div>
 
-            <div className="divide-y divide-hairline">
+            <div className="px-6 pb-2 grid gap-3 sm:grid-cols-2">
               {prefSpecs.map((spec) => {
                 const participant = participants.find((p) => p.id === spec.participant_id);
+                const name = participant?.display_name ?? spec.participant_id.slice(0, 8);
+                const isVeg = spec.veg === "veg";
+                const isNonVeg = spec.veg === "non_veg";
+                const vegColor = isVeg ? "#16a34a" : isNonVeg ? "#dc2626" : "#9ca3af";
                 return (
-                  <div key={spec.id} className="px-6 py-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="font-sans font-bold text-sm text-ink">
-                        {participant?.display_name ?? spec.participant_id.slice(0, 8)}
+                  <div key={spec.id} className="border border-hairline p-4 flex flex-col gap-3">
+                    {/* Identity row */}
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-8 h-8 rounded-full bg-ink text-canvas flex items-center justify-center font-sans font-bold text-xs shrink-0">
+                        {name[0]?.toUpperCase() ?? "G"}
                       </span>
-                      <span className="text-xs border border-hairline px-1.5 py-0.5 font-sans text-body-muted">
+                      <span className="font-sans font-bold text-[15px] text-ink truncate flex-1">
+                        {name}
+                      </span>
+                      {/* Veg / non-veg marker */}
+                      <span
+                        className="flex items-center justify-center w-3.5 h-3.5 border shrink-0"
+                        style={{ borderColor: vegColor }}
+                        title={vegLabel[spec.veg] ?? spec.veg}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: vegColor }} />
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEditingPid(spec.participant_id)}
+                        className="text-xs font-sans text-body-muted hover:text-ink underline underline-offset-2 shrink-0"
+                      >
+                        Edit
+                      </button>
+                    </div>
+
+                    {/* Veg + budget pills */}
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="text-xs border border-hairline px-2 py-0.5 font-sans text-body-muted">
                         {vegLabel[spec.veg] ?? spec.veg}
                       </span>
                       {spec.budget_max && (
-                        <span className="text-xs border border-hairline px-1.5 py-0.5 font-sans text-body-muted">
+                        <span className="text-xs border border-hairline px-2 py-0.5 font-sans text-body-muted">
                           ≤ ₹{spec.budget_max}
                         </span>
                       )}
                     </div>
 
-                    {spec.allergies.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mb-1.5">
-                        <span className="text-xs font-sans text-ink font-bold">Allergies:</span>
-                        {spec.allergies.map((a) => (
-                          <span
-                            key={a}
-                            className="text-xs border border-ink text-ink bg-canvas-soft font-bold px-1.5 py-0.5 font-sans"
-                          >
-                            {a}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {spec.excludes.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mb-1.5">
-                        <span className="text-xs font-sans text-body-muted">Excludes:</span>
-                        {spec.excludes.map((e) => (
-                          <span
-                            key={e}
-                            className="text-xs border border-hairline text-body-muted px-1.5 py-0.5 font-sans"
-                          >
-                            {e}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
+                    {/* Vibes */}
                     {spec.soft.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        <span className="text-xs font-sans text-body-muted">Vibes:</span>
-                        {spec.soft.map((s) => (
-                          <span
-                            key={s}
-                            className="text-xs bg-canvas-soft border border-hairline px-1.5 py-0.5 font-sans text-body-muted"
-                          >
-                            {s}
-                          </span>
-                        ))}
+                      <div>
+                        <p className="text-[11px] font-sans uppercase tracking-wide text-body-muted mb-1">Craving</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {spec.soft.map((s) => (
+                            <span
+                              key={s}
+                              className="text-xs bg-canvas-soft border border-hairline px-2 py-0.5 font-sans text-ink"
+                            >
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Allergies — emphasised */}
+                    {spec.allergies.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-sans uppercase tracking-wide text-body-muted mb-1">Allergies</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {spec.allergies.map((a) => (
+                            <span
+                              key={a}
+                              className="text-xs border border-ink text-ink bg-canvas-soft font-bold px-2 py-0.5 font-sans"
+                            >
+                              {a}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Excludes */}
+                    {spec.excludes.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-sans uppercase tracking-wide text-body-muted mb-1">Avoids</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {spec.excludes.map((e) => (
+                            <span
+                              key={e}
+                              className="text-xs border border-hairline text-body-muted px-2 py-0.5 font-sans"
+                            >
+                              {e}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -557,6 +675,17 @@ export default function Lobby({
               </AnimatePresence>
             </ul>
 
+            {!hostHasCard && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCardSheetOpen(true)}
+                className="border-ink font-sans text-xs w-full"
+              >
+                Fill your craving card
+              </Button>
+            )}
+
             <Progress
               value={participants.length ? (cardsSubmitted / participants.length) * 100 : 0}
               className="h-1.5"
@@ -583,12 +712,57 @@ export default function Lobby({
               {activating
                 ? "Starting…"
                 : allSubmitted
-                ? "Activate — find our restaurant →"
+                ? "Find our spot →"
                 : "Waiting for everyone's card…"}
             </Button>
           </motion.div>
         </div>
       )}
+
+      {/* Host craving card dialog */}
+      <Dialog open={cardSheetOpen} onOpenChange={setCardSheetOpen}>
+        <DialogContent className="max-w-md w-full overflow-y-auto max-h-[90vh]">
+          <DialogHeader className="mb-1">
+            <DialogTitle className="font-display text-xl">Your craving card</DialogTitle>
+          </DialogHeader>
+          <CravingCardForm
+            submitting={submittingCard}
+            submitLabel="Submit my card ✓"
+            onSubmit={handleSubmitHostCard}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit parsed preferences dialog */}
+      <Dialog open={!!editingPid} onOpenChange={(o) => !o && setEditingPid(null)}>
+        <DialogContent className="max-w-md w-full overflow-y-auto max-h-[90vh]">
+          <DialogHeader className="mb-1">
+            <DialogTitle className="font-display text-xl">Edit preferences</DialogTitle>
+          </DialogHeader>
+          {(() => {
+            const spec = prefSpecs.find((s) => s.participant_id === editingPid);
+            if (!spec) return null;
+            const must = spec.must_have ?? "";
+            const vibe = spec.soft.filter((s) => s !== must).join(", ");
+            return (
+              <CravingCardForm
+                key={spec.participant_id}
+                initial={{
+                  veg: spec.veg,
+                  budget_max: spec.budget_max,
+                  cuisine_vibe: vibe,
+                  must_have: must,
+                  allergies: spec.allergies,
+                  deal_breakers: spec.excludes,
+                }}
+                submitting={savingEdit}
+                submitLabel="Save changes"
+                onSubmit={(card) => handleSavePrefEdit(spec.participant_id, card)}
+              />
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Address picker sheet */}
       <Sheet open={addressSheetOpen} onOpenChange={setAddressSheetOpen}>

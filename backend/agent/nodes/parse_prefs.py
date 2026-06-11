@@ -1,87 +1,61 @@
-import asyncio
-import json
 import logging
+import re
 
 from langgraph.types import RunnableConfig
 
 from agent.state import CircleState, PrefSpec
 from db import crud
-from llm import chat, PARSE_MODEL
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM = """You are extracting structured food preferences from a craving card.
-Return JSON matching exactly this schema (no extra fields):
-{
-  "veg": "veg" | "non_veg" | "either",
-  "budget_max": <integer rupees or null>,
-  "allergies": ["item1", "item2"],
-  "excludes": ["item1", "item2"],
-  "soft": ["cuisine1", "descriptor2"]
-}
-Rules:
-- allergies and excludes are HARD constraints — never move them to soft.
-- soft is a list of concise strings: cuisine names, textures, descriptors (e.g. "biryani", "spicy", "light", "Chinese").
-- If the person said "veg only" map to "veg"; "non-veg" or "non_veg" → "non_veg"; otherwise "either".
-- Deal breakers from the card map directly to excludes.
-- Return valid JSON only — no markdown fences."""
+
+def _split_tags(text: str | None) -> list[str]:
+    """Split a free-text field (cuisine vibe / must have) into concise soft tags."""
+    if not text:
+        return []
+    parts = re.split(r"[,/]|\band\b|&", text, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
 
 
-async def _parse_single(participant_id: str, card: dict) -> PrefSpec:
-    user_msg = (
-        f"veg/nonveg/either: {card['veg']}\n"
-        f"budget: {card.get('budget_max') or 'any'}\n"
-        f"cuisine vibe: {card.get('cuisine_vibe') or 'not specified'}\n"
-        f"must have: {card.get('must_have') or 'not specified'}\n"
-        f"allergies: {card.get('allergies', [])}\n"
-        f"deal breakers: {card.get('deal_breakers', [])}"
-    )
+def _build_spec(participant_id: str, card: dict) -> PrefSpec:
+    """Build a PrefSpec straight from the structured craving card.
 
-    try:
-        raw = await chat(
-            model=PARSE_MODEL,
-            system=_SYSTEM,
-            user=user_msg,
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(raw)
-    except Exception as exc:
-        logger.warning("LLM parse failed for %s: %s — using card data directly", participant_id, exc)
-        data = {}
+    The card already captures veg / budget / allergies / deal-breakers as
+    structured inputs — there is nothing to "interpret", so we copy them
+    verbatim (an LLM here only risks flipping them). The only free-text fields
+    are cuisine vibe + must-have, which become soft preference tags; must-have
+    is also kept verbatim so the planner can prioritise that exact dish.
+    """
+    veg = card.get("veg")
+    if veg not in ("veg", "non_veg", "either"):
+        veg = "either"
 
-    veg_raw = data.get("veg", card["veg"])
-    if veg_raw not in ("veg", "non_veg", "either"):
-        veg_raw = card["veg"] if card["veg"] in ("veg", "non_veg", "either") else "either"
+    must_have = (card.get("must_have") or "").strip() or None
+    soft = _split_tags(card.get("cuisine_vibe")) + _split_tags(must_have)
 
     return PrefSpec(
         participant_id=participant_id,
         display_name=card["display_name"],
-        veg=veg_raw,
-        budget_max=data.get("budget_max") or card.get("budget_max"),
-        allergies=data.get("allergies") or list(card.get("allergies", [])),
-        excludes=data.get("excludes") or list(card.get("deal_breakers", [])),
-        soft=data.get("soft") or [],
+        veg=veg,
+        budget_max=card.get("budget_max"),
+        allergies=list(card.get("allergies", [])),
+        excludes=list(card.get("deal_breakers", [])),
+        soft=soft,
+        must_have=must_have,
     )
 
 
 async def run(state: CircleState, config: RunnableConfig) -> dict:
     db = config["configurable"]["db"]
-    supabase_url = config["configurable"].get("supabase_url", "")
-    supabase_key = config["configurable"].get("supabase_key", "")
 
-    tasks = [
-        _parse_single(pid, card)
-        for pid, card in state.raw_inputs.items()
+    pref_specs = [
+        _build_spec(pid, card) for pid, card in state.raw_inputs.items()
     ]
-    pref_specs: list[PrefSpec] = list(await asyncio.gather(*tasks))
 
-    # Persist to DB
     for spec in pref_specs:
         crud.upsert_pref_spec(db, spec)
 
-    # Update room status so frontend can detect parsing is done
     crud.set_room_status(db, state.room_id, "planning")
 
     logger.info("parse_prefs: wrote %d pref_specs for room %s", len(pref_specs), state.room_id)
-    # Store as plain dicts for checkpoint-safety (see CircleState docstring)
     return {"pref_specs": [s.model_dump() for s in pref_specs]}

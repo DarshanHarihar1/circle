@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -54,7 +53,7 @@ export default function Home() {
         className="font-display text-center text-ink leading-none tracking-tight mb-4"
         style={{ fontSize: "clamp(40px, 7vw, 64px)", letterSpacing: "-0.5px" }}
       >
-        Group food,<br />decided together.
+        Dinner,<br />minus the debate.
       </h1>
 
       <p
@@ -74,37 +73,31 @@ export default function Home() {
         >
           Start a circle
         </Button>
-        <Button
-          variant="outline"
-          className="bg-canvas text-ink border-ink hover:bg-canvas-soft font-sans font-bold text-sm tracking-[0.3px] px-5 py-3 h-auto"
-        >
-          How it works
-        </Button>
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="font-display text-xl">
-              What should we call you?
+              Who&apos;s at the table?
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-body-muted font-sans -mt-1">
             Your friends will see this name in the circle.
           </p>
-          <Input
-            placeholder="Your name"
+          <input
+            placeholder="First name's fine"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             autoFocus
-            className="mt-1"
+            className="mt-1 w-full h-12 rounded-2xl border border-hairline bg-canvas-soft px-4 text-base font-sans text-ink placeholder:text-body-muted outline-none transition-colors focus:border-ink focus:bg-canvas"
           />
           {error && <p className="text-sm text-ink font-bold font-sans">{error}</p>}
           <Button
             onClick={handleCreate}
             disabled={!name.trim() || loading}
-            className="w-full bg-ink text-canvas hover:bg-ink/80 font-sans font-bold"
+            className="w-full h-12 rounded-2xl bg-ink text-canvas hover:bg-ink/80 font-sans font-bold"
           >
             {loading ? "Creating…" : "Create circle"}
           </Button>

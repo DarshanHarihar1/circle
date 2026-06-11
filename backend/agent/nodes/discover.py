@@ -1,7 +1,9 @@
-import json
 import logging
+import re
+import time
 from langgraph.types import RunnableConfig
 from agent.state import CircleState
+from agent.nodes.cart_mcp import call_structured
 from db import crud
 
 logger = logging.getLogger(__name__)
@@ -9,79 +11,89 @@ logger = logging.getLogger(__name__)
 MAX_CANDIDATES = 12
 
 
-def _parse_restaurants(raw: str | list) -> list[dict]:
-    """Parse search_restaurants tool response into a list of restaurant dicts."""
-    if isinstance(raw, list):
-        # Already a list of dicts
-        return raw
+def _cost_int(val) -> int | None:
+    """costForTwo arrives as a string like '₹400 for two' — extract the number."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    m = re.search(r"\d+", str(val))
+    return int(m.group()) if m else None
 
-    text = str(raw).strip()
 
-    # Try JSON array first
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "restaurants" in data:
-            return data["restaurants"]
-        if isinstance(data, dict) and "data" in data:
-            items = data["data"]
-            if isinstance(items, list):
-                return items
-    except (json.JSONDecodeError, KeyError):
-        pass
+def _clean_name(name: str | None) -> str:
+    """Swiggy appends a sponsored tag like ' (Ad)' to restaurant names — drop it."""
+    if not name:
+        return "Unknown"
+    return re.sub(r"\s*\(Ad\)\s*$", "", name).strip() or "Unknown"
 
-    # Fallback: try to extract restaurant data from text
-    restaurants = []
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
-    for line in lines:
-        if not line:
-            continue
-        r: dict = {}
-        # Extract restaurant_id / id
-        for pat in [r"restaurantId[:\s]+([A-Za-z0-9_-]+)",
-                    r"\"id\"[:\s]+\"([^\"]+)\"",
-                    r"\(ID:\s*([^)]+)\)"]:
-            import re
-            m = re.search(pat, line, re.IGNORECASE)
-            if m:
-                r["id"] = m.group(1).strip()
-                break
-        if not r.get("id"):
-            continue
 
-        import re
-        name_m = re.search(r"\"name\"[:\s]+\"([^\"]+)\"", line)
-        if name_m:
-            r["name"] = name_m.group(1)
-        avail_m = re.search(r"(OPEN|CLOSED)", line)
-        r["availabilityStatus"] = avail_m.group(1) if avail_m else "OPEN"
-        restaurants.append(r)
+_QUERY_STOPWORDS = {"with", "some", "something", "food", "style"}
 
-    return restaurants
+
+def _search_queries(pref_specs: list[dict]) -> list[str]:
+    """Turn soft-preference tags into Swiggy restaurant-search queries.
+
+    A free-text cuisine vibe ("pizza bakery classic stuffed garlic bread") is a
+    single soft tag, but Swiggy's search returns *dish* entries (which have no
+    menu) for long, dish-specific phrases — only short cuisine-ish queries
+    return real restaurants. So we query each tag as the user phrased it AND its
+    individual words; discover's restaurant filter drops the dish-only
+    responses, leaving whichever queries surfaced real restaurants.
+    """
+    seen: set[str] = set()
+    queries: list[str] = []
+
+    def add(q: str) -> None:
+        q = q.strip()
+        key = q.lower()
+        if q and key not in seen:
+            seen.add(key)
+            queries.append(q)
+
+    for spec in pref_specs:
+        for term in spec.get("soft", []):
+            term = (term or "").strip()
+            if not term:
+                continue
+            add(term)
+            words = term.split()
+            if len(words) > 1:
+                for w in words:
+                    if len(w) >= 4 and w.lower() not in _QUERY_STOPWORDS:
+                        add(w)
+
+    return queries or ["restaurant"]
+
+
+def _is_real_restaurant(r: dict) -> bool:
+    """Distinguish a real restaurant from a dish-search entry.
+
+    Dish entries come back as bare {id, name, cuisines:[]} and get_restaurant_menu
+    returns no items for their id. Real restaurants carry rating/cost/area/status
+    metadata. Requiring one of those keys filters the dish entries out.
+    """
+    return bool(
+        r.get("avgRating")
+        or r.get("costForTwo")
+        or r.get("areaName")
+        or r.get("availabilityStatus")
+    )
 
 
 async def run(state: CircleState, config: RunnableConfig) -> dict:
     tools = config["configurable"]["mcp_tools"]
     db = config["configurable"]["db"]
 
-    # Build union of cuisine queries from all participants' soft prefs.
-    # pref_specs are plain dicts in state (PrefSpec.model_dump()).
-    seen_queries: set[str] = set()
-    queries: list[str] = []
-    for spec in state.pref_specs:
-        for term in spec.get("soft", []):
-            t = term.lower().strip()
-            if t and t not in seen_queries:
-                seen_queries.add(t)
-                queries.append(term)
-
-    # Ensure at least one search query
-    if not queries:
-        queries = ["restaurant"]
+    # Build search queries from all participants' soft prefs (expanding free-text
+    # phrases into cuisine words). pref_specs are plain dicts (PrefSpec.model_dump()).
+    queries = _search_queries(state.pref_specs)
 
     # Cap number of search calls to avoid rate limits
     queries = queries[:MAX_CANDIDATES]
+    logger.info("discover: START room %s — %d search quer(ies): %s",
+                state.room_id, len(queries), queries)
+    t_start = time.perf_counter()
 
     seen_ids: set[str] = set()
     candidates: list[dict] = []
@@ -90,15 +102,17 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
         if len(candidates) >= MAX_CANDIDATES:
             break
         try:
-            result = await tools["search_restaurants"].ainvoke({
+            sc = await call_structured(tools["search_restaurants"], {
                 "addressId": state.address_id,
                 "query": query,
             })
-            restaurants = _parse_restaurants(result)
+            restaurants = sc.get("restaurants") or []
             for r in restaurants:
                 rid = r.get("id") or r.get("restaurantId") or r.get("restaurant_id", "")
                 if not rid or rid in seen_ids:
                     continue
+                if not _is_real_restaurant(r):
+                    continue  # dish-search entry — has no menu, skip
                 avail = (
                     r.get("availabilityStatus")
                     or r.get("availability", "OPEN")
@@ -108,11 +122,11 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
                 seen_ids.add(rid)
                 candidates.append({
                     "id": rid,
-                    "name": r.get("name") or r.get("restaurant_name") or r.get("restaurantName", "Unknown"),
+                    "name": _clean_name(r.get("name") or r.get("restaurant_name") or r.get("restaurantName")),
                     "cuisines": r.get("cuisines") or r.get("cuisine") or [],
                     "rating": r.get("avgRating") or r.get("rating"),
-                    "cost_for_two": r.get("costForTwo") or r.get("cost_for_two"),
-                    "distance_km": r.get("distance") or r.get("distance_km"),
+                    "cost_for_two": _cost_int(r.get("costForTwo") or r.get("cost_for_two")),
+                    "distance_km": r.get("distanceKm") or r.get("distance") or r.get("distance_km"),
                     "availability": "OPEN",
                     "metadata": r,
                 })
@@ -127,5 +141,6 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
     for c in candidates:
         crud.create_candidate(db, state.room_id, c)
 
-    logger.info("discover: found %d candidates for room %s", len(candidates), state.room_id)
+    logger.info("discover: DONE — found %d candidates for room %s in %.2fs",
+                len(candidates), state.room_id, time.perf_counter() - t_start)
     return {"candidates": candidates}

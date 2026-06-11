@@ -58,6 +58,20 @@ def _sub_order_from(restaurant: dict, best_items: dict) -> dict:
     }
 
 
+def _blended_satisfaction(soft_avg: float, ratings: list) -> float:
+    """Blend the soft-preference match (75%) with restaurant rating (25%).
+
+    Without the rating term, every restaurant serving the same cuisine scores
+    identically (everyone finds an equally-matching dish), so all plans show the
+    same satisfaction. Folding in rating differentiates them.
+    """
+    rated = [float(x) for x in ratings if x]
+    if not rated:
+        return round(soft_avg, 3)
+    rating_norm = (sum(rated) / len(rated)) / 5.0
+    return round(0.75 * soft_avg + 0.25 * rating_norm, 3)
+
+
 def _per_person_fit(best_items: dict, name_by_pid: dict) -> dict:
     fit = {}
     for pid, bi in best_items.items():
@@ -79,7 +93,7 @@ def build_single_plans(candidates: list[dict], feasibility_map: dict,
             "kind": "single",
             "sub_orders": [sub],
             "total": sub["total"],
-            "satisfaction": sc["satisfaction"],
+            "satisfaction": _blended_satisfaction(sc["satisfaction"], [r.get("rating")]),
             "n_deliveries": 1,
             "rationale": "",
             "why_not_runner_up": "",
@@ -136,14 +150,15 @@ def build_multi_plan(candidates: list[dict], feasibility_map: dict,
     fit = {}
     for g in groups.values():
         fit.update(_per_person_fit(g["best_items"], name_by_pid))
-    satisfaction = score_sum / len(pref_specs) if pref_specs else 0.0
+    soft_avg = score_sum / len(pref_specs) if pref_specs else 0.0
+    ratings = [g["restaurant"].get("rating") for g in groups.values()]
 
     return {
         "plan_id": str(uuid.uuid4()),
         "kind": "multi",
         "sub_orders": sub_orders,
         "total": total,
-        "satisfaction": round(satisfaction, 3),
+        "satisfaction": _blended_satisfaction(soft_avg, ratings),
         "n_deliveries": len(sub_orders),
         "rationale": "",
         "why_not_runner_up": "",
@@ -152,10 +167,16 @@ def build_multi_plan(candidates: list[dict], feasibility_map: dict,
     }
 
 
+# Each extra delivery (more fees, staggered arrival) costs this much "effective
+# satisfaction". A clearly-better multi plan still wins, but a marginally-better
+# one won't beat the convenience of a single delivery.
+DELIVERY_PENALTY = 0.05
+
+
 def rank_plans(plans: list[dict]) -> list[dict]:
-    """Single-delivery first, then satisfaction desc, then cheapest. Top 3."""
-    ranked = sorted(
-        plans,
-        key=lambda p: (-int(p["n_deliveries"] == 1), -p["satisfaction"], p["total"]),
-    )
+    """Best match first (each extra delivery penalised), then cheapest. Top 3."""
+    def effective(p: dict) -> float:
+        return p["satisfaction"] - DELIVERY_PENALTY * (p["n_deliveries"] - 1)
+
+    ranked = sorted(plans, key=lambda p: (-effective(p), p["total"]))
     return ranked[:3]

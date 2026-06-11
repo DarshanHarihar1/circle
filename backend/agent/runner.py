@@ -14,6 +14,7 @@ Each segment:
 import logging
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 import json
 import re
@@ -80,19 +81,28 @@ async def run_discover(room_id: str, access_token: str) -> None:
             pref_specs=crud.pref_specs_as_dicts(db, room_id),
         )
 
-        async with MultiServerMCPClient({
+        mcp = MultiServerMCPClient({
             "food": {
                 "url": FOOD_URL,
                 "transport": "streamable_http",
                 "headers": {"Authorization": f"Bearer {access_token}"},
             }
-        }) as mcp:
-            tools_by_name = {t.name: t for t in await mcp.get_tools()}
+        })
+        import time
+        from agent.nodes.cart_mcp import reset_mcp_call_count
+        reset_mcp_call_count()
+        t_graph = time.perf_counter()
+        # One persistent MCP session for the whole segment — re-handshaking per
+        # tool call (the default get_tools() path) quadruples HTTP traffic and
+        # trips Swiggy's rate limit (429).
+        async with mcp.session("food") as session:
+            tools_by_name = {t.name: t for t in await load_mcp_tools(session)}
             graph = build_discover_graph()
             await graph.ainvoke(state, _config(room_id, db, tools_by_name))
 
         crud.set_room_status(db, room_id, "choosing")
-        logger.info("run_discover complete for room %s", room_id)
+        logger.info("run_discover complete for room %s — total graph time %.2fs",
+                    room_id, time.perf_counter() - t_graph)
     except Exception as exc:
         logger.error("run_discover failed for room %s: %s", room_id, exc, exc_info=True)
         crud.set_room_status(db, room_id, "planning")  # let the host retry approve
@@ -140,14 +150,15 @@ async def run_build_cart(
             current_sub_order_idx=idx,
         )
 
-        async with MultiServerMCPClient({
+        mcp = MultiServerMCPClient({
             "food": {
                 "url": FOOD_URL,
                 "transport": "streamable_http",
                 "headers": {"Authorization": f"Bearer {access_token}"},
             }
-        }) as mcp:
-            tools_by_name = {t.name: t for t in await mcp.get_tools()}
+        })
+        async with mcp.session("food") as session:
+            tools_by_name = {t.name: t for t in await load_mcp_tools(session)}
             cfg = _config(room_id, db, tools_by_name)
             cfg["configurable"]["host_vpa"] = host_vpa or ""
             graph = build_order_graph()
@@ -251,14 +262,15 @@ async def place_order_and_advance(
 
         sub = sub_orders[idx]
 
-        async with MultiServerMCPClient({
+        mcp = MultiServerMCPClient({
             "food": {
                 "url": FOOD_URL,
                 "transport": "streamable_http",
                 "headers": {"Authorization": f"Bearer {access_token}"},
             }
-        }) as mcp:
-            tools_by_name = {t.name: t for t in await mcp.get_tools()}
+        })
+        async with mcp.session("food") as session:
+            tools_by_name = {t.name: t for t in await load_mcp_tools(session)}
 
             # Rebuild cart — it may have expired since the host confirmed
             from agent.nodes.build_cart import _build_with_retry
@@ -334,14 +346,15 @@ async def run_track(room_id: str, access_token: str) -> None:
             ],
         )
 
-        async with MultiServerMCPClient({
+        mcp = MultiServerMCPClient({
             "food": {
                 "url": FOOD_URL,
                 "transport": "streamable_http",
                 "headers": {"Authorization": f"Bearer {access_token}"},
             }
-        }) as mcp:
-            tools_by_name = {t.name: t for t in await mcp.get_tools()}
+        })
+        async with mcp.session("food") as session:
+            tools_by_name = {t.name: t for t in await load_mcp_tools(session)}
             graph = build_track_graph()
             await graph.ainvoke(state, _config(room_id, db, tools_by_name))
 

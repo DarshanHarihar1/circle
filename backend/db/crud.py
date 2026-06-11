@@ -136,6 +136,7 @@ def upsert_pref_spec(db: Session, spec) -> PrefSpec:
         existing.allergies = spec.allergies
         existing.excludes = spec.excludes
         existing.soft = spec.soft
+        existing.must_have = spec.must_have
         existing.updated_at = datetime.utcnow()
         db.commit()
         return existing
@@ -149,6 +150,7 @@ def upsert_pref_spec(db: Session, spec) -> PrefSpec:
         allergies=spec.allergies,
         excludes=spec.excludes,
         soft=spec.soft,
+        must_have=spec.must_have,
         raw_chat="",
         approved=False,
     )
@@ -164,6 +166,24 @@ def upsert_pref_spec(db: Session, spec) -> PrefSpec:
 
 def get_pref_specs(db: Session, room_id: str) -> list[PrefSpec]:
     return db.query(PrefSpec).filter(PrefSpec.room_id == room_id).all()
+
+
+def update_pref_spec(db: Session, participant_id: str, fields: dict) -> PrefSpec | None:
+    """Host edit of a parsed pref spec. Only updates the keys present in fields."""
+    row = (
+        db.query(PrefSpec)
+        .filter(PrefSpec.participant_id == participant_id)
+        .first()
+    )
+    if not row:
+        return None
+    for key in ("veg", "budget_max", "allergies", "excludes", "soft", "must_have"):
+        if key in fields:
+            setattr(row, key, fields[key])
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def approve_pref_specs(db: Session, room_id: str) -> None:
@@ -231,6 +251,7 @@ def pref_specs_as_dicts(db: Session, room_id: str) -> list[dict]:
             "allergies": list(s.allergies) if s.allergies else [],
             "excludes": list(s.excludes) if s.excludes else [],
             "soft": list(s.soft) if s.soft else [],
+            "must_have": s.must_have,
         })
     return out
 

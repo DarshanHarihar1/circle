@@ -1,69 +1,60 @@
-import json
 import logging
+import time
 
 from langgraph.types import RunnableConfig
 
 from agent.state import CircleState
 from agent import resolver
 from db import crud
-from llm import chat, RATIONALE_MODEL
 
 logger = logging.getLogger(__name__)
 
-_RATIONALE_SYS = (
-    "Write a 2-sentence 'why this plan works for everyone' using ONLY the data "
-    "given. Then write a 1-sentence 'why not the runner-up' using ONLY the "
-    "contrast data given. Never invent facts. Return JSON: "
-    '{"rationale": "...", "why_not_runner_up": "..."}'
-)
 
+def _rationale(plan: dict, runner_up: dict | None) -> tuple[str, str]:
+    """Deterministic, always-accurate 'why this plan' + 'why not the runner-up'.
 
-async def _rationale(plan: dict, runner_up: dict | None) -> tuple[str, str]:
-    summary = {
-        "kind": plan["kind"],
-        "restaurants": [s["restaurant_name"] for s in plan["sub_orders"]],
-        "total": plan["total"],
-        "deliveries": plan["n_deliveries"],
-        "satisfaction": plan["satisfaction"],
-        "per_person": plan["per_person_fit"],
-    }
-    contrast = None
+    Built straight from the plan numbers — no LLM. The rationale is a factual
+    summary, so a template is faster, never wrong, and has no rate limits.
+    """
+    title = " + ".join(s["restaurant_name"] for s in plan["sub_orders"])
+    n_people = len(plan.get("per_person_fit") or {})
+    sat = round(plan.get("satisfaction", 0) * 100)
+    deliveries = "one delivery" if plan["n_deliveries"] == 1 else f"{plan['n_deliveries']} deliveries"
+    who = f"all {n_people} of you" if n_people else "everyone"
+
+    rationale = (
+        f"{title} covers {who} in {deliveries} for ₹{plan['total']} "
+        f"— {sat}% match to everyone's cards."
+    )
+
+    why_not = ""
     if runner_up:
-        contrast = {
-            "kind": runner_up["kind"],
-            "total": runner_up["total"],
-            "deliveries": runner_up["n_deliveries"],
-            "satisfaction": runner_up["satisfaction"],
-        }
-    try:
-        raw = await chat(
-            model=RATIONALE_MODEL,
-            system=_RATIONALE_SYS,
-            user=f"Plan: {json.dumps(summary)}\nRunner-up contrast: {json.dumps(contrast)}",
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(raw)
-        return data.get("rationale", "").strip(), data.get("why_not_runner_up", "").strip()
-    except Exception as exc:
-        logger.warning("rationale generation failed: %s — using fallback", exc)
-        names = ", ".join(summary["restaurants"])
-        rationale = (
-            f"{names} covers everyone's picks in {plan['n_deliveries']} "
-            f"delivery(s) for ₹{plan['total']}."
-        )
-        why_not = ""
-        if runner_up:
-            diff = runner_up["total"] - plan["total"]
-            why_not = (
-                f"The runner-up costs ₹{abs(diff)} "
-                f"{'more' if diff >= 0 else 'less'} with "
-                f"{runner_up['n_deliveries']} delivery(s)."
-            )
-        return rationale, why_not
+        edges = []
+        diff = runner_up["total"] - plan["total"]
+        if diff > 0:
+            edges.append(f"₹{diff} cheaper")
+        elif diff < 0:
+            edges.append(f"₹{-diff} pricier")
+        ru_sat = round(runner_up.get("satisfaction", 0) * 100)
+        if sat > ru_sat:
+            edges.append(f"a higher {sat}% vs {ru_sat}% match")
+        elif sat < ru_sat:
+            edges.append(f"a lower {sat}% vs {ru_sat}% match")
+        if plan["n_deliveries"] < runner_up["n_deliveries"]:
+            edges.append("fewer deliveries")
+        elif plan["n_deliveries"] > runner_up["n_deliveries"]:
+            edges.append("more deliveries")
+        if edges:
+            why_not = "Versus the runner-up: " + ", ".join(edges) + "."
+
+    return rationale, why_not
 
 
 async def run(state: CircleState, config: RunnableConfig) -> dict:
     db = config["configurable"]["db"]
+
+    logger.info("build_plans: START room %s", state.room_id)
+    t_start = time.perf_counter()
 
     pref_specs = state.pref_specs
     name_by_pid = {s["participant_id"]: s["display_name"] for s in pref_specs}
@@ -134,10 +125,11 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
 
     ranked = resolver.rank_plans(plans)
 
-    # Rationale per plan (runner-up = next plan in the ranking)
+    # Rationale per plan (runner-up = next plan in the ranking). Deterministic —
+    # no LLM, so it's instant and always factually correct.
     for i, plan in enumerate(ranked):
         runner_up = ranked[i + 1] if i + 1 < len(ranked) else None
-        plan["rationale"], plan["why_not_runner_up"] = await _rationale(plan, runner_up)
+        plan["rationale"], plan["why_not_runner_up"] = _rationale(plan, runner_up)
         plan["rank"] = i + 1
 
     # Persist
@@ -145,8 +137,9 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
     for plan in ranked:
         crud.create_plan(db, state.room_id, plan)
 
-    logger.info("build_plans: %d plans for room %s (conflict=%s)",
-                len(ranked), state.room_id, bool(conflict_message))
+    logger.info("build_plans: DONE — %d plans for room %s (conflict=%s) in %.2fs",
+                len(ranked), state.room_id, bool(conflict_message),
+                time.perf_counter() - t_start)
 
     out = {"plans": ranked}
     if conflict_message:

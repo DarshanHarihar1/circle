@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
+from logging_config import setup_logging
 from routers import auth, rooms
+
+setup_logging()
 
 app = FastAPI(title="Circle API", version="0.1.0")
 

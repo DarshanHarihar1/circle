@@ -8,7 +8,16 @@ import { supabase } from "@/lib/supabase";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type SubOrderItem = { participant_id: string; item_name: string; price: number };
-type SubOrder = { restaurant_id: string; restaurant_name: string; items: SubOrderItem[]; coupon_code: string | null };
+type SubOrder = {
+  restaurant_id: string;
+  restaurant_name: string;
+  items: SubOrderItem[];
+  coupon_code: string | null;
+  subtotal: number;
+  fees: number;
+  discount: number;
+  total: number;
+};
 type Plan = {
   id: string;
   kind: "single" | "multi";
@@ -45,6 +54,7 @@ export default function PlanReveal({
   const [loadingStep, setLoadingStep] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
   const [openWhyNot, setOpenWhyNot] = useState<Record<string, boolean>>({});
+  const [openDetails, setOpenDetails] = useState<Record<string, boolean>>({});
   const ready = plans.length > 0;
 
   const fetchPlans = useCallback(async () => {
@@ -268,6 +278,86 @@ export default function PlanReveal({
                     {names[pid] ?? "Guest"}
                   </span>
                 ))}
+              </div>
+
+              {/* Order details + bill breakup — collapsible */}
+              <div className="mt-3">
+                <button
+                  onClick={() => setOpenDetails((p) => ({ ...p, [plan.id]: !p[plan.id] }))}
+                  className="font-sans text-xs text-body-muted hover:text-ink"
+                >
+                  {openDetails[plan.id] ? "▾" : "▸"} View order & bill
+                </button>
+                <AnimatePresence>
+                  {openDetails[plan.id] && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden mt-2 flex flex-col gap-3"
+                    >
+                      {plan.sub_orders.map((sub, si) => {
+                        const itemsByPid: Record<string, SubOrderItem[]> = {};
+                        for (const it of sub.items) {
+                          (itemsByPid[it.participant_id] ??= []).push(it);
+                        }
+                        return (
+                          <div key={si} className="border border-hairline">
+                            {plan.sub_orders.length > 1 && (
+                              <p className="font-sans text-xs font-bold text-ink px-3 pt-2">
+                                {sub.restaurant_name}
+                              </p>
+                            )}
+                            {/* Items grouped by person */}
+                            <div className="divide-y divide-hairline">
+                              {Object.entries(itemsByPid).map(([pid, items]) => (
+                                <div key={pid} className="px-3 py-2">
+                                  <div className="flex justify-between mb-0.5">
+                                    <span className="font-sans text-xs font-bold text-ink">
+                                      {names[pid] ?? "Guest"}
+                                    </span>
+                                    <span className="font-sans text-xs text-body-muted">
+                                      ₹{items.reduce((s, i) => s + i.price, 0)}
+                                    </span>
+                                  </div>
+                                  {items.map((it, ii) => (
+                                    <div key={ii} className="flex justify-between pl-2">
+                                      <span className="font-sans text-xs text-body-muted">
+                                        {it.item_name} (1×)
+                                      </span>
+                                      <span className="font-sans text-xs text-body-muted">₹{it.price}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                            {/* Cost breakup */}
+                            <div className="border-t border-hairline px-3 py-2 flex flex-col gap-0.5">
+                              <div className="flex justify-between font-sans text-xs text-body-muted">
+                                <span>Subtotal</span>
+                                <span>₹{sub.subtotal}</span>
+                              </div>
+                              <div className="flex justify-between font-sans text-xs text-body-muted">
+                                <span>Delivery fee</span>
+                                <span>₹{sub.fees}</span>
+                              </div>
+                              {sub.coupon_code && sub.discount > 0 && (
+                                <div className="flex justify-between font-sans text-xs text-body-muted">
+                                  <span>Coupon ({sub.coupon_code})</span>
+                                  <span>−₹{sub.discount}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between font-sans text-xs font-bold text-ink border-t border-hairline pt-1 mt-0.5">
+                                <span>Total</span>
+                                <span>₹{sub.total}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Live votes */}

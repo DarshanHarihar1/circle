@@ -1,106 +1,40 @@
-import json
 import logging
-import re
+import time
 
 from langgraph.types import RunnableConfig
 
 from agent.state import CircleState
+from agent.nodes.cart_mcp import (
+    apply_cart_coupon,
+    call_structured,
+    resolve_cart_item,
+    update_error,
+)
 from db import crud
 
 logger = logging.getLogger(__name__)
 
 
-def _cart_item_format(item: dict) -> dict:
-    """Items for update_food_cart — variant items MUST include variantGroups."""
-    d = {"itemId": item["item_id"], "quantity": 1}
-    if item.get("variant"):
-        d["variantGroups"] = [item["variant"]]
-    if item.get("addons"):
-        d["addons"] = item["addons"]
-    return d
-
-
-def _parse_cart(raw) -> dict:
-    """
-    Pull {total, subtotal, fees, discount} out of a get_food_cart response.
-    Defensive across JSON and text shapes.
-    """
-    if isinstance(raw, dict):
-        data = raw
-    else:
-        text = str(raw)
-        try:
-            data = json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            # text fallback — find "total: 836" style numbers
-            out = {}
-            for key in ("total", "subtotal", "discount"):
-                m = re.search(rf"{key}[\"']?\s*[:=]\s*₹?\s*(\d+)", text, re.I)
-                if m:
-                    out[key] = int(m.group(1))
-            fee = re.search(r"(?:delivery\s*fee|fees)[\"']?\s*[:=]\s*₹?\s*(\d+)", text, re.I)
-            if fee:
-                out["fees"] = int(fee.group(1))
-            return out
-        if "CART_EXPIRED" in text:
-            return {"expired": True}
-
-    def _g(*keys):
-        for k in keys:
-            if k in data and data[k] is not None:
-                try:
-                    return int(data[k])
-                except (TypeError, ValueError):
-                    pass
-        return None
-
-    return {
-        "total": _g("total", "grandTotal", "finalAmount", "payableAmount"),
-        "subtotal": _g("subtotal", "itemTotal"),
-        "fees": _g("fees", "deliveryFee", "deliveryCharge") or 0,
-        "discount": _g("discount", "couponDiscount") or 0,
-    }
-
-
-def _parse_coupons(raw) -> str | None:
-    """Return the first COD-eligible coupon code, if any."""
-    try:
-        data = raw if isinstance(raw, (list, dict)) else json.loads(str(raw))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    coupons = data.get("coupons", data) if isinstance(data, dict) else data
-    if not isinstance(coupons, list):
-        return None
-    for c in coupons:
-        if not isinstance(c, dict):
-            continue
-        cod_ok = c.get("codEligible", c.get("cod_eligible", True))
-        code = c.get("code") or c.get("couponCode")
-        if code and cod_ok:
-            return code
-    return None
-
-
 async def _price_sub_order(tools: dict, sub: dict, address_id: str) -> dict:
     """Build the cart for one sub-order, read its real total, then flush."""
     rid = sub["restaurant_id"]
-    cart_items = [_cart_item_format(i) for i in sub["items"]]
+    cart_items = [
+        await resolve_cart_item(tools, i, rid, address_id) for i in sub["items"]
+    ]
 
-    await tools["update_food_cart"].ainvoke({
+    update_sc = await call_structured(tools["update_food_cart"], {
         "restaurantId": rid,
         "addressId": address_id,
         "cartItems": cart_items,
         "restaurantName": sub.get("restaurant_name", ""),
     })
-    cart_raw = await tools["get_food_cart"].ainvoke({"addressId": address_id})
-    parsed = _parse_cart(cart_raw)
+    err = update_error(update_sc)
+    if err:
+        logger.warning("price_plans: update_food_cart failed for %s: %s",
+                       sub.get("restaurant_name"), err)
 
-    coupon = None
-    try:
-        coup_raw = await tools["fetch_food_coupons"].ainvoke({"addressId": address_id})
-        coupon = _parse_coupons(coup_raw)
-    except Exception as exc:
-        logger.debug("fetch_food_coupons failed (non-fatal): %s", exc)
+    cart_sc = await call_structured(tools["get_food_cart"], {"addressId": address_id})
+    parsed = await apply_cart_coupon(tools, cart_sc, address_id)
 
     try:
         await tools["flush_food_cart"].ainvoke({"addressId": address_id})
@@ -109,13 +43,13 @@ async def _price_sub_order(tools: dict, sub: dict, address_id: str) -> dict:
 
     subtotal = parsed.get("subtotal") if parsed.get("subtotal") is not None else sub["subtotal"]
     fees = parsed.get("fees", 0) or 0
-    discount = parsed.get("discount", 0) or 0
+    discount = parsed.get("discount") or 0
     total = parsed.get("total")
     if total is None:
         total = subtotal + fees - discount
 
     return {**sub, "subtotal": subtotal, "fees": fees,
-            "discount": discount, "total": total, "coupon_code": coupon}
+            "discount": discount, "total": total, "coupon_code": parsed.get("coupon_code")}
 
 
 async def run(state: CircleState, config: RunnableConfig) -> dict:
@@ -126,22 +60,32 @@ async def run(state: CircleState, config: RunnableConfig) -> dict:
         logger.info("price_plans: cart tools unavailable — keeping estimated totals")
         return {}
 
+    n_subs = sum(len(p["sub_orders"]) for p in state.plans)
+    logger.info("price_plans: START room %s — pricing %d plans (%d sub-orders)",
+                state.room_id, len(state.plans), n_subs)
+    t_start = time.perf_counter()
+
     priced_plans = []
     for plan in state.plans:
         new_subs = []
         plan_total = 0
         for sub in plan["sub_orders"]:
+            t_sub = time.perf_counter()
             try:
                 psub = await _price_sub_order(tools, sub, state.address_id)
             except Exception as exc:
                 logger.warning("pricing failed for %s: %s — keeping estimate",
                                sub.get("restaurant_name"), exc)
                 psub = sub
+            logger.info("  priced sub-order '%s' in %.2fs (total=%s)",
+                        sub.get("restaurant_name"), time.perf_counter() - t_sub,
+                        psub.get("total"))
             new_subs.append(psub)
             plan_total += psub["total"]
         priced = {**plan, "sub_orders": new_subs, "total": plan_total}
         priced_plans.append(priced)
         crud.update_plan_pricing(db, priced["plan_id"], plan_total, new_subs)
 
-    logger.info("price_plans: priced %d plans for room %s", len(priced_plans), state.room_id)
+    logger.info("price_plans: DONE — priced %d plans for room %s in %.2fs",
+                len(priced_plans), state.room_id, time.perf_counter() - t_start)
     return {"plans": priced_plans}

@@ -7,67 +7,12 @@ import confetti from "canvas-confetti";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { supabase } from "@/lib/supabase";
+import CravingCardForm, { type CravingCardData } from "@/components/CravingCardForm";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type RoomInfo = { room_code: string; host_user_id: string; status: string };
-
-function TagInput({
-  tags,
-  onChange,
-  placeholder,
-  variant,
-}: {
-  tags: string[];
-  onChange: (t: string[]) => void;
-  placeholder: string;
-  variant: "alert" | "muted";
-}) {
-  const [input, setInput] = useState("");
-  function add() {
-    const val = input.trim();
-    if (val && !tags.includes(val)) onChange([...tags, val]);
-    setInput("");
-  }
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {tags.map((t) => (
-        <span
-          key={t}
-          className={`flex items-center gap-1 text-xs font-sans px-2 py-0.5 border ${
-            variant === "alert"
-              ? "border-ink text-ink bg-canvas-soft font-bold"
-              : "border-hairline text-ink bg-canvas-soft"
-          }`}
-        >
-          {t}
-          <button
-            type="button"
-            onClick={() => onChange(tags.filter((x) => x !== t))}
-            className="opacity-60 hover:opacity-100"
-          >
-            ×
-          </button>
-        </span>
-      ))}
-      <input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
-        }}
-        onBlur={add}
-        placeholder={placeholder}
-        className={`text-xs font-sans border-b bg-transparent outline-none py-0.5 min-w-[80px] ${
-          variant === "alert" ? "border-ink placeholder-body-muted" : "border-hairline"
-        }`}
-      />
-    </div>
-  );
-}
 
 export default function JoinPage() {
   const { id: roomId } = useParams<{ id: string }>();
@@ -81,14 +26,6 @@ export default function JoinPage() {
   const [submitting, setSubmitting] = useState(false);
   const [kicked, setKicked] = useState(false);
   const pidRef = useRef("");
-
-  // Card fields
-  const [veg, setVeg] = useState("either");
-  const [budget, setBudget] = useState("");
-  const [cuisineVibe, setCuisineVibe] = useState("");
-  const [mustHave, setMustHave] = useState("");
-  const [allergies, setAllergies] = useState<string[]>([]);
-  const [dealBreakers, setDealBreakers] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`${API_URL}/rooms/${roomId}`)
@@ -127,20 +64,12 @@ export default function JoinPage() {
     setStep("card");
   }
 
-  async function handleSubmitCard() {
+  async function handleSubmitCard(card: CravingCardData) {
     setSubmitting(true);
     const res = await fetch(`${API_URL}/rooms/${roomId}/cards`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        participant_id: participantId,
-        veg,
-        budget_max: budget ? parseInt(budget) : null,
-        cuisine_vibe: cuisineVibe || null,
-        must_have: mustHave || null,
-        allergies,
-        deal_breakers: dealBreakers,
-      }),
+      body: JSON.stringify({ participant_id: participantId, ...card }),
     });
     if (!res.ok) { setSubmitting(false); return; }
     confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 } });
@@ -209,112 +138,19 @@ export default function JoinPage() {
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
             className="w-full max-w-sm flex flex-col gap-5 pb-16"
           >
-            <h1 className="font-display text-2xl text-ink">Your craving card</h1>
+            <div>
+              <h1 className="font-display text-2xl text-ink">Your craving card</h1>
+              <p className="font-sans text-sm text-body-muted mt-1">
+                Tell the circle what you&apos;re after — we&apos;ll do the rest.
+              </p>
+            </div>
             <div className="border-t border-hairline" />
 
-            {/* Diet */}
-            <div className="flex flex-col gap-2">
-              <Label className="font-sans text-sm font-bold text-ink">Diet</Label>
-              <ToggleGroup
-                type="single"
-                value={veg}
-                onValueChange={(v) => v && setVeg(v)}
-                className="justify-start gap-2"
-              >
-                {[
-                  { value: "veg", label: "Veg" },
-                  { value: "non_veg", label: "Non-veg" },
-                  { value: "either", label: "Either" },
-                ].map(({ value, label }) => (
-                  <ToggleGroupItem
-                    key={value}
-                    value={value}
-                    className="border border-ink font-sans text-sm px-4 data-[state=on]:bg-ink data-[state=on]:text-canvas"
-                  >
-                    {label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
-
-            {/* Budget */}
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="budget" className="font-sans text-sm font-bold text-ink">
-                Budget per person
-              </Label>
-              <div className="flex items-center gap-1.5">
-                <span className="font-sans text-sm text-body-muted">₹</span>
-                <Input
-                  id="budget"
-                  type="number"
-                  placeholder="any"
-                  value={budget}
-                  onChange={(e) => setBudget(e.target.value)}
-                  className="w-28"
-                />
-              </div>
-            </div>
-
-            {/* Cuisine vibe */}
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="vibe" className="font-sans text-sm font-bold text-ink">
-                Cuisine vibe
-              </Label>
-              <Textarea
-                id="vibe"
-                placeholder="e.g. biryani, something light, comfort food"
-                value={cuisineVibe}
-                onChange={(e) => setCuisineVibe(e.target.value)}
-                rows={2}
-              />
-            </div>
-
-            {/* Must have */}
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="must" className="font-sans text-sm font-bold text-ink">
-                Must have
-              </Label>
-              <Input
-                id="must"
-                placeholder="e.g. chicken, extra spicy"
-                value={mustHave}
-                onChange={(e) => setMustHave(e.target.value)}
-              />
-            </div>
-
-            {/* Allergies */}
-            <div className="flex flex-col gap-2">
-              <Label className="font-sans text-sm font-bold text-ink">
-                ⚠ Allergies — these will never appear in your order
-              </Label>
-              <TagInput
-                tags={allergies}
-                onChange={setAllergies}
-                placeholder="add allergy, press Enter"
-                variant="alert"
-              />
-            </div>
-
-            {/* Deal breakers */}
-            <div className="flex flex-col gap-2">
-              <Label className="font-sans text-sm font-bold text-ink">
-                Deal breakers
-              </Label>
-              <TagInput
-                tags={dealBreakers}
-                onChange={setDealBreakers}
-                placeholder="add item, press Enter"
-                variant="muted"
-              />
-            </div>
-
-            <Button
-              onClick={handleSubmitCard}
-              disabled={submitting}
-              className="w-full bg-ink text-canvas hover:bg-ink/80 font-sans font-bold mt-2"
-            >
-              {submitting ? "Submitting…" : "Submit my card ✓"}
-            </Button>
+            <CravingCardForm
+              submitting={submitting}
+              submitLabel="Submit my card ✓"
+              onSubmit={handleSubmitCard}
+            />
           </motion.div>
         )}
       </AnimatePresence>

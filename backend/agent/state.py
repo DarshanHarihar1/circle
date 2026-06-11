@@ -10,6 +10,7 @@ class PrefSpec(BaseModel):
     allergies: list[str] = []
     excludes: list[str] = []
     soft: list[str] = []
+    must_have: str | None = None
 
 
 class SubOrderItem(BaseModel):
