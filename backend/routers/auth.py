@@ -147,5 +147,9 @@ async def auth_callback(
         f"{settings.FRONTEND_URL}/auth/callback?room_id={room_id}",
         status_code=302,
     )
-    redirect.set_cookie("circle_session", session_cookie, httponly=True, samesite="lax", max_age=86400 * 30)
+    redirect.set_cookie(
+        "circle_session", session_cookie, httponly=True,
+        samesite=settings.COOKIE_SAMESITE, secure=settings.COOKIE_SECURE,
+        max_age=86400 * 30,
+    )
     return redirect

@@ -24,5 +24,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Session cookie. When the frontend and backend are on different domains
+    # (e.g. Vercel + Render) the browser only sends the cookie cross-site if it
+    # is SameSite=None; Secure. Locally (same site, http) the defaults apply.
+    COOKIE_SAMESITE: str = "lax"   # set "none" in prod
+    COOKIE_SECURE: bool = False    # set true in prod (HTTPS)
+
 
 settings = Settings()
