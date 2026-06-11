@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: circle-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Pin the Python version to match local dev
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      # Cross-site cookie for Vercel(frontend) + Render(backend)
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "true"
+      # Static config (safe to commit)
+      - key: SWIGGY_MCP_BASE_URL
+        value: https://mcp.swiggy.com
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      # Secrets / environment-specific — set these in the Render dashboard
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: VAULT_FERNET_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: FRONTEND_URL          # https://<your-app>.vercel.app
+        sync: false
+      - key: SWIGGY_REDIRECT_URI   # https://<this-service>.onrender.com/auth/callback
+        sync: false
