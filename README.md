@@ -1,23 +1,15 @@
-# Circle — Design Docs
+# Circle
 
 **Circle** turns a group's conflicting food cravings into one or two
 tap-to-vote plans and places the **real Swiggy order** for everyone — every
 restaurant, menu, price, coupon, and order is live via Swiggy's **MCP server**.
 
-## Start here
+## Docs
 
-| Doc | What it covers | Status |
-|---|---|---|
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | The system **as built** — pipeline, data model, matching engine, MCP, realtime | ✅ Current — source of truth |
-| [`DESIGN.md`](./DESIGN.md) | UI design language (editorial ink-on-canvas system, tokens, components) | ✅ Current |
-| [`circle-system-design.md`](./circle-system-design.md) | Original **HLD** — concept, principles, architecture | 📜 Original design (reference) |
-| [`circle-lld.md`](./circle-lld.md) | Original **LLD** — schema, routes, agent, MCP, vault | 📜 Original design (reference) |
-
-> The two original design docs predate implementation. Where they differ from
-> [`ARCHITECTURE.md`](./ARCHITECTURE.md), **ARCHITECTURE.md is authoritative** —
-> see its [§9 Divergences](./ARCHITECTURE.md#9-divergences-from-the-original-hldlld).
-> (The phase-wise implementation plan has been removed — it was a build artifact,
-> not a design doc.)
+| Doc | What it covers |
+|---|---|
+| [`design/ARCHITECTURE.md`](./design/ARCHITECTURE.md) | The system **as built** — pipeline, data model, matching engine, MCP, realtime |
+| [`design/DESIGN.md`](./design/DESIGN.md) | UI design language (editorial ink-on-canvas system, tokens, components) |
 
 ## TL;DR architecture
 

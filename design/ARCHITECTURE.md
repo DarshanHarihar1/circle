@@ -4,10 +4,9 @@ Circle turns a group's conflicting food cravings into one or two tap-to-vote
 plans and places the **real Swiggy order** for everyone. Every restaurant,
 menu, price, coupon, and order is live — sourced from Swiggy's **MCP server**.
 
-This document describes the system **as it is actually built**. For the original
-design intent see [`circle-system-design.md`](./circle-system-design.md) (HLD)
-and [`circle-lld.md`](./circle-lld.md) (LLD); where they differ, this document
-wins (see [§9 Divergences](#9-divergences-from-the-original-hldlld)).
+This document describes the system **as it is actually built**. See
+[§9 Key design decisions](#9-key-design-decisions) for the rationale behind the
+non-obvious choices.
 
 ---
 
@@ -235,19 +234,18 @@ The MCP **text** response is a lossy human summary; the authoritative payload is
 
 ---
 
-## 9. Divergences from the original HLD/LLD
+## 9. Key design decisions
 
-The original [`circle-system-design.md`](./circle-system-design.md) and
-[`circle-lld.md`](./circle-lld.md) predate implementation. Where they differ, this
-document is authoritative. Notable changes:
-
-1. **Execution model** — segmented, DB-backed graphs replace the LangGraph
-   interrupt/checkpoint-resume pattern (the 1.2.x Postgres checkpointer didn't
-   persist on resume).
-2. **No LLM in the hot path** — preference parsing and rationale are deterministic;
-   the LLM integration is auxiliary, not required for planning.
-3. **Stronger guarantees** — feasibility now enforces a **must-have** hard gate and
-   a **cuisine-coverage** gate, so every shown plan gives each person their actual
-   craving.
-4. **Ranking** — best-match-first with a **delivery nudge**, instead of a hard
-   single-delivery-first rule.
+1. **Segmented, DB-backed execution** — the LangGraph 1.2.x Postgres checkpointer
+   doesn't persist on the resume path, so instead of interrupt/checkpoint resume
+   the agent runs as four segments that reconstruct state from Postgres. The app
+   DB is the source of truth; segments are idempotent and restart-safe.
+2. **No LLM in the hot path** — preference parsing, scoring, ranking, and rationale
+   are deterministic. This is fast, never hallucinates a dish, and has no
+   rate-limit risk. The LLM integration is auxiliary, not required for planning.
+3. **Three layered guarantees** — hard constraints (diet/budget/allergies), then a
+   **must-have** hard gate, then a **cuisine-coverage** gate — so every shown plan
+   gives each person their actual craving rather than a "best available" compromise.
+4. **Best-match ranking with a delivery nudge** — `satisfaction − 0.05 × (extra
+   deliveries)` — a clearly-better multi-restaurant split wins, a marginal one
+   doesn't beat the convenience of a single delivery.
